@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Project-local artifacts (regenerable)
+.tmp/
+/output/
+.session/
+
+# Course material (copyrighted, do not redistribute)
+OneOption-eBook.pdf
+option-stalker-manual/
+the-system-course/
+
+# Course scraper scripts (not part of the daytrading scanner)
+scrape_course.py
+scrape_course_with_images.py
+scrape_intro_with_images.py
+scrape_manual.py
+inspect_course.py
+debug_images.py
+debug_screenshot.png
+
+# Secrets
+.env
+.env.*
+credentials.json
+token.json
+*.pem
+*.key
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
