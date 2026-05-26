@@ -25,6 +25,7 @@ ID_NEXT_BTN = "next-btn"
 ID_BREAKOUTS_FILTER = "breakouts-filter"
 ID_MIN_RVOL_INPUT = "min-rvol-input"
 ID_MIN_RS_INPUT = "min-rs-input"
+ID_MAX_SMA200_AGE_INPUT = "max-sma200-age-input"
 ID_EARNINGS_INPUT = "earnings-override"
 ID_DAILY_CHART = "daily-chart"
 ID_INTRADAY_CHART = "intraday-chart"
@@ -105,6 +106,27 @@ def build_layout() -> dbc.Container:
                             step=0.1,
                             debounce=True,
                             style={"width": "80px", "fontSize": "0.85rem"},
+                        ),
+                    ],
+                    style={"display": "flex", "alignItems": "center"},
+                ),
+                width="auto",
+            ),
+            dbc.Col(
+                html.Div(
+                    [
+                        html.Label(
+                            "200 ↑ ≤",
+                            title="Show only stocks where price reclaimed the 200-day SMA within the last N sessions (and is still above it). Blank = no filter.",
+                            style={"marginRight": "6px", "fontSize": "0.85rem"},
+                        ),
+                        dcc.Input(
+                            id=ID_MAX_SMA200_AGE_INPUT,
+                            type="number",
+                            placeholder="3d",
+                            min=0, max=10, step=1,
+                            debounce=True,
+                            style={"width": "70px", "fontSize": "0.85rem"},
                         ),
                     ],
                     style={"display": "flex", "alignItems": "center"},

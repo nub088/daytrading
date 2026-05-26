@@ -21,6 +21,7 @@ from .layout import (
     ID_DAILY_CHART,
     ID_EARNINGS_INPUT,
     ID_INTRADAY_CHART,
+    ID_MAX_SMA200_AGE_INPUT,
     ID_METADATA_BAR,
     ID_MIN_RS_INPUT,
     ID_MIN_RVOL_INPUT,
@@ -45,9 +46,10 @@ def register_callbacks(app) -> None:
         Input(ID_BREAKOUTS_FILTER, "value"),
         Input(ID_MIN_RVOL_INPUT, "value"),
         Input(ID_MIN_RS_INPUT, "value"),
+        Input(ID_MAX_SMA200_AGE_INPUT, "value"),
         State(ID_TICKER_DROPDOWN, "value"),
     )
-    def _refilter_dropdown(filter_mode, min_rvol, min_rs, current_value):
+    def _refilter_dropdown(filter_mode, min_rvol, min_rs, max_sma200_age, current_value):
         df = data_loader.load_scanner_df()
 
         def _to_float(v):
@@ -56,11 +58,18 @@ def register_callbacks(app) -> None:
             except (TypeError, ValueError):
                 return None
 
+        def _to_int(v):
+            try:
+                return int(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
         opts = data_loader.ticker_choices(
             df,
             breakouts_only=(filter_mode == "breakouts"),
             min_rvol=_to_float(min_rvol),
             min_rs=_to_float(min_rs),
+            max_sma200_age=_to_int(max_sma200_age),
         )
         if not opts:
             return [], None

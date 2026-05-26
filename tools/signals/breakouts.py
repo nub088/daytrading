@@ -24,6 +24,7 @@ import math
 import pandas as pd
 
 from ..indicators.atr import atr_latest
+from ..indicators.sma import sma as sma_series
 from ..levels import find_all_levels
 from .base import Signal
 
@@ -37,6 +38,7 @@ _FLAG_COLS = (
     "broke_trendline_short",
     "broke_sma200_long",
     "broke_sma200_short",
+    "sma200_cross_up_age",
 )
 _DISTANCE_COLS = (
     "nearest_resistance",
@@ -53,9 +55,13 @@ class Breakouts(Signal):
         self,
         sma_periods: tuple[int, ...] = (200,),
         atr_period: int = 20,
+        sma200_cross_lookback: int = 10,
     ) -> None:
         self.sma_periods = tuple(int(p) for p in sma_periods)
         self.atr_period = int(atr_period)
+        # How far back to search for a SMA200 reclaim. The GUI's
+        # "Max SMA200 reclaim age" filter must be <= this value.
+        self.sma200_cross_lookback = int(sma200_cross_lookback)
 
     def compute(
         self,
@@ -116,6 +122,10 @@ class Breakouts(Signal):
             if not math.isnan(nearest_support):
                 dist_to_sup = (close_today - nearest_support) / atr_val
 
+        cross_age = sma200_cross_up_age(
+            ohlcv["close"], lookback=self.sma200_cross_lookback
+        )
+
         # SMA-200 column uses the legacy short name; future SMAs would
         # need explicit columns added.
         return {
@@ -127,6 +137,7 @@ class Breakouts(Signal):
             "broke_trendline_short": float(per_source_short.get("trendline", 0)),
             "broke_sma200_long": float(per_source_long.get("sma_200", 0)),
             "broke_sma200_short": float(per_source_short.get("sma_200", 0)),
+            "sma200_cross_up_age": cross_age,
             "nearest_resistance": nearest_resistance,
             "nearest_support": nearest_support,
             "dist_to_resistance_atr": dist_to_res,
@@ -136,3 +147,38 @@ class Breakouts(Signal):
     @staticmethod
     def _nan_out() -> dict[str, float]:
         return {c: float("nan") for c in (*_FLAG_COLS, *_DISTANCE_COLS)}
+
+
+def sma200_cross_up_age(close: pd.Series, lookback: int = 10) -> float:
+    """Sessions since the most recent SMA200 up-cross, or NaN.
+
+    Returns:
+      0  → cross happened on today's bar
+      1  → on yesterday's bar
+      …  → up to `lookback` sessions back
+      NaN → no cross within lookback, or today's close has fallen back
+            below the SMA200 (the reclaim failed and shouldn't pass the
+            "fresh reclaim" filter).
+    """
+    if close is None or len(close) < 201:
+        return float("nan")
+    s200 = sma_series(close, 200)
+    last = len(close) - 1
+    s_last = s200.iloc[last]
+    c_last = close.iloc[last]
+    if pd.isna(s_last) or pd.isna(c_last) or c_last <= s_last:
+        return float("nan")
+    horizon = min(lookback, last - 1)
+    for age in range(0, horizon + 1):
+        i = last - age
+        if i < 1:
+            break
+        c_i = close.iloc[i]
+        c_prev = close.iloc[i - 1]
+        s_i = s200.iloc[i]
+        s_prev = s200.iloc[i - 1]
+        if pd.isna(c_i) or pd.isna(c_prev) or pd.isna(s_i) or pd.isna(s_prev):
+            continue
+        if c_prev <= s_prev and c_i > s_i:
+            return float(age)
+    return float("nan")

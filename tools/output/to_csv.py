@@ -23,6 +23,7 @@ COLUMN_ORDER = [
     "broke_horizontal_long", "broke_horizontal_short",
     "broke_trendline_long", "broke_trendline_short",
     "broke_sma200_long", "broke_sma200_short",
+    "sma200_cross_up_age",
     "nearest_resistance", "nearest_support",
     "dist_to_resistance_atr", "dist_to_support_atr",
     "combined_rank",

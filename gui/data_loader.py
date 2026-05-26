@@ -18,6 +18,7 @@ from tools.data import cache
 from tools.data.fetch_earnings import latest_earnings_date, next_earnings_date
 from tools.data.fetch_intraday import fetch_5min
 from tools.data.macro_calendar import MacroEvent, upcoming_events
+from tools.signals.breakouts import sma200_cross_up_age
 
 OUTPUT_DIR = Path("/home/nublet/Projects/daytrading/output")
 
@@ -48,16 +49,50 @@ def latest_scanner_csv() -> Path | None:
     return candidates[-1] if candidates else None
 
 
+# Cache the scanner DF (keyed on path + mtime) so we don't re-augment
+# sma200_cross_up_age on every dropdown filter change.
+_scanner_cache: dict = {"key": None, "df": None}
+
+
 def load_scanner_df(path: Path | None = None) -> pd.DataFrame:
     """Load the scanner CSV into a DataFrame.
 
     Falls back to an empty frame with the expected columns if no CSV
     exists yet — lets the GUI launch cleanly before the first scan.
+
+    If the CSV pre-dates the SMA200-reclaim signal, augments the column
+    on the fly from the parquet cache (one-time cost, cached after).
     """
     p = path or latest_scanner_csv()
     if p is None or not p.exists():
         return pd.DataFrame(columns=["ticker", "combined_rank", "broke_long"])
-    return pd.read_csv(p)
+    key = (str(p), p.stat().st_mtime)
+    if _scanner_cache["key"] == key:
+        return _scanner_cache["df"]
+    df = pd.read_csv(p)
+    df = _ensure_sma200_cross_age(df)
+    _scanner_cache.update({"key": key, "df": df})
+    return df
+
+
+def _ensure_sma200_cross_age(df: pd.DataFrame, lookback: int = 10) -> pd.DataFrame:
+    """Backfill `sma200_cross_up_age` if the CSV was produced before this signal.
+
+    Reads each ticker's daily parquet and computes the most-recent SMA200
+    up-cross age. Tickers with no parquet cache get NaN.
+    """
+    if "sma200_cross_up_age" in df.columns:
+        return df
+    ages: list[float] = []
+    for ticker in df["ticker"].tolist():
+        ohlcv = cache.read(ticker)
+        if ohlcv.empty:
+            ages.append(float("nan"))
+            continue
+        ages.append(sma200_cross_up_age(ohlcv["close"], lookback=lookback))
+    df = df.copy()
+    df["sma200_cross_up_age"] = ages
+    return df
 
 
 def get_scanner_row(df: pd.DataFrame, ticker: str) -> ScannerRow | None:
@@ -157,6 +192,7 @@ def ticker_choices(
     breakouts_only: bool = False,
     min_rvol: float | None = None,
     min_rs: float | None = None,
+    max_sma200_age: int | None = None,
     rvol_col: str = "rvol_21d",
     rs_col: str = "rrs_21d",
 ) -> list[dict]:
@@ -170,9 +206,13 @@ def ticker_choices(
       - `min_rs`: drop tickers where `rs_col` < min_rs (NaN excluded).
         Default rs_col is the 21-day vol-adjusted RRS — its t-stat-like
         scale (~2-12 for top names) makes thresholds like 2.0 meaningful.
+      - `max_sma200_age`: keep only tickers whose price reclaimed the
+        SMA200 (close crossed above) within the last `max_sma200_age`
+        sessions and is still above it. 0 = today's cross only.
+        Pete's "200-day MA reclaim" trend-reversal setup.
 
     Each option label includes the ticker, rank percentile, breakout
-    flag, RVol, and RS (so the user sees which names are above thresholds).
+    flag, RVol, RS, and SMA200 reclaim age when present.
     """
     if df.empty:
         return []
@@ -186,6 +226,9 @@ def ticker_choices(
     if min_rs is not None and rs_col in work.columns:
         rs = pd.to_numeric(work[rs_col], errors="coerce")
         work = work[rs >= min_rs]
+    if max_sma200_age is not None and "sma200_cross_up_age" in work.columns:
+        age = pd.to_numeric(work["sma200_cross_up_age"], errors="coerce")
+        work = work[(age >= 0) & (age <= max_sma200_age)]
     work = work.sort_values("combined_rank", ascending=False, na_position="last")
 
     options = []
@@ -194,6 +237,7 @@ def ticker_choices(
         rank = row.get("combined_rank", float("nan"))
         rv = row.get(rvol_col, float("nan"))
         rs = row.get(rs_col, float("nan"))
+        age = row.get("sma200_cross_up_age", float("nan"))
         flags = ""
         if row.get("broke_long", 0) == 1:
             flags += " ↑"
@@ -202,5 +246,8 @@ def ticker_choices(
         rank_str = f"{rank*100:.0f}%" if pd.notna(rank) else "—"
         rv_str = f" · RV {rv:.1f}" if pd.notna(rv) else ""
         rs_str = f" · RS {rs:.1f}" if pd.notna(rs) else ""
-        options.append({"label": f"{tkr}  ({rank_str}){flags}{rv_str}{rs_str}", "value": tkr})
+        age_str = f" · 200↑ {int(age)}d" if pd.notna(age) else ""
+        options.append(
+            {"label": f"{tkr}  ({rank_str}){flags}{rv_str}{rs_str}{age_str}", "value": tkr}
+        )
     return options

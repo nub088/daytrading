@@ -34,6 +34,7 @@ class TrendlineLevel(Level):
     anchor1_idx: int      # earlier anchor
     anchor2_idx: int      # later anchor (> anchor1_idx)
     direction: str        # 'falling' (resistance) or 'rising' (support)
+    touch_count: int = 2  # bars between anchor1 and today within tol of line
 
     @property
     def source(self) -> str:
@@ -63,8 +64,16 @@ def find_trendlines(
     min_bars_span: int = 10,
     tol_atr: float = 0.25,
     atr_period: int = 20,
+    max_per_direction: int = 2,
 ) -> list[TrendlineLevel]:
-    """Return resistance + support trendlines that were valid up to yesterday."""
+    """Return resistance + support trendlines that were valid up to yesterday.
+
+    Returned lines are ranked by `touch_count` (descending) — the number
+    of bars between anchor1 and today whose high/low comes within `tol`
+    of the line. Pete: "the more data points they connect the more
+    relevant they are" (eBook p. 28). `max_per_direction` caps how many
+    lines per direction reach the chart to avoid clutter.
+    """
     if ohlcv.empty:
         return []
     n = len(ohlcv)
@@ -91,31 +100,28 @@ def find_trendlines(
     swing_highs = [s for s in swings if s.kind == "high"][-max_pivots:]
     swing_lows = [s for s in swings if s.kind == "low"][-max_pivots:]
 
-    out: list[TrendlineLevel] = []
-    out.extend(
-        _scan_pairs(
-            pivots=swing_highs,
-            extremes=highs_np,
-            close_np=close_np,
-            today=today,
-            direction="falling",
-            min_bars_span=min_bars_span,
-            tol=tol,
-        )
+    falling = _scan_pairs(
+        pivots=swing_highs,
+        extremes=highs_np,
+        close_np=close_np,
+        today=today,
+        direction="falling",
+        min_bars_span=min_bars_span,
+        tol=tol,
     )
-    out.extend(
-        _scan_pairs(
-            pivots=swing_lows,
-            extremes=lows_np,
-            close_np=close_np,
-            today=today,
-            direction="rising",
-            min_bars_span=min_bars_span,
-            tol=tol,
-        )
+    rising = _scan_pairs(
+        pivots=swing_lows,
+        extremes=lows_np,
+        close_np=close_np,
+        today=today,
+        direction="rising",
+        min_bars_span=min_bars_span,
+        tol=tol,
     )
-    out.sort(key=lambda t: t.bars_span, reverse=True)
-    return out
+    # Within each direction, prefer more touches; break ties with longer span.
+    falling.sort(key=lambda t: (t.touch_count, t.bars_span), reverse=True)
+    rising.sort(key=lambda t: (t.touch_count, t.bars_span), reverse=True)
+    return falling[:max_per_direction] + rising[:max_per_direction]
 
 
 def _scan_pairs(
@@ -149,6 +155,8 @@ def _scan_pairs(
             ):
                 continue
 
+            touches = _count_touches(extremes, p1.idx, today, slope, intercept, tol)
+
             out.append(
                 TrendlineLevel(
                     slope=float(slope),
@@ -156,9 +164,30 @@ def _scan_pairs(
                     anchor1_idx=int(p1.idx),
                     anchor2_idx=int(p2.idx),
                     direction=direction,
+                    touch_count=int(touches),
                 )
             )
     return out
+
+
+def _count_touches(
+    extremes, a: int, until: int, slope: float, intercept: float, tol: float
+) -> int:
+    """Bars in [a, until] whose extreme is within `tol` of the line.
+
+    Both anchors always touch by construction. Additional touches between
+    or after the anchors are what make a line meaningful — they're the
+    "data points connected" that Pete weighs trendlines by.
+    """
+    count = 0
+    for k in range(a, until + 1):
+        v = extremes[k]
+        if pd.isna(v):
+            continue
+        line = intercept + slope * k
+        if abs(v - line) <= tol:
+            count += 1
+    return count
 
 
 def _holds_between(
