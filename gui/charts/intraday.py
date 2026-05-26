@@ -159,6 +159,14 @@ def build_intraday_figure(
     fig.update_yaxes(title_text="Price", row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1, secondary_y=False)
     fig.update_yaxes(title_text="RVol", row=2, col=1, secondary_y=True, showgrid=False)
+
+    # Measurement tool style — matches the daily chart so drawline shapes
+    # are visually consistent across panes. User-drawn shapes are marked
+    # editable automatically, which the measurement callback uses to
+    # isolate them from algorithmically-added overlays.
+    fig.update_layout(
+        newshape=dict(line=dict(color="#0ea5e9", width=2), opacity=0.9),
+    )
     return fig
 
 

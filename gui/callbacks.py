@@ -150,20 +150,25 @@ def register_callbacks(app) -> None:
 
 
 def _register_measurement_tool(app) -> None:
-    """Toolbar drawline → display ΔPrice / Δ% / Δbars in the header strip.
+    """Toolbar drawline (on either chart) → ΔPrice / Δ% / Δtime pill.
 
-    User-drawn shapes on the daily chart are marked `editable=True` by
-    Plotly's drawline tool; algorithmically-added levels are not. We
-    pick the most recent editable shape (the latest drawn line) and
-    compute its endpoint deltas.
+    User-drawn shapes are marked `editable=True` by Plotly's drawline
+    tool; algorithmically-added levels are not. We pick the most recent
+    editable shape from whichever chart fired the relayout and compute
+    endpoint deltas. The time-delta format follows the chart's bar
+    period (Δd for daily, Δh/Δm for 5-min).
     """
     @app.callback(
         Output(ID_MEASURE_DISPLAY, "children"),
         Input(ID_DAILY_CHART, "relayoutData"),
+        Input(ID_INTRADAY_CHART, "relayoutData"),
         State(ID_DAILY_CHART, "figure"),
+        State(ID_INTRADAY_CHART, "figure"),
         prevent_initial_call=True,
     )
-    def _measure(_relayout, fig):
+    def _measure(_d_relayout, _i_relayout, d_fig, i_fig):
+        is_intraday = ctx.triggered_id == ID_INTRADAY_CHART
+        fig = i_fig if is_intraday else d_fig
         if not fig:
             return ""
         shapes = (fig.get("layout") or {}).get("shapes") or []
@@ -178,19 +183,27 @@ def _register_measurement_tool(app) -> None:
             return ""
         dy = y1 - y0
         pct = (dy / y0 * 100) if y0 else 0.0
-        # Δbars from x endpoints (daily bars ≈ calendar days minus weekends; we
-        # show calendar-day delta which is close enough for swing context).
-        bar_label = ""
+        time_label = ""
         try:
             x0 = pd.to_datetime(s["x0"])
             x1 = pd.to_datetime(s["x1"])
-            d_days = int(abs((x1 - x0).days))
-            bar_label = f"  ·  Δ{d_days}d"
+            delta = abs(x1 - x0)
+            if is_intraday:
+                total_min = int(round(delta.total_seconds() / 60))
+                if total_min >= 60:
+                    h, m = divmod(total_min, 60)
+                    time_label = f"  ·  Δ{h}h{m:02d}m"
+                else:
+                    time_label = f"  ·  Δ{total_min}m"
+            else:
+                # Daily bars ≈ calendar days minus weekends; show
+                # calendar-day delta — close enough for swing context.
+                time_label = f"  ·  Δ{int(delta.days)}d"
         except (KeyError, TypeError, ValueError):
             pass
         sign_color = "#16a34a" if dy >= 0 else "#dc2626"
         return html.Span(
-            f"Δ${dy:+.2f}  ({pct:+.2f}%){bar_label}",
+            f"Δ${dy:+.2f}  ({pct:+.2f}%){time_label}",
             style={
                 "padding": "4px 10px",
                 "background": sign_color,

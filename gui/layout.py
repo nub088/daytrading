@@ -225,7 +225,11 @@ def build_layout() -> dbc.Container:
                         dcc.Loading(
                             dcc.Graph(
                                 id=ID_INTRADAY_CHART,
-                                config={"displaylogo": False, "scrollZoom": True},
+                                config={
+                                    "displaylogo": False,
+                                    "scrollZoom": True,
+                                    "modeBarButtonsToAdd": ["drawline", "eraseshape"],
+                                },
                                 style={"height": "720px"},
                             ),
                             type="circle",
