@@ -45,3 +45,33 @@ def latest_earnings_date(ticker: str) -> pd.Timestamp | None:
     if most_recent.tz is not None:
         most_recent = most_recent.tz_convert(None) if False else most_recent.tz_localize(None)
     return most_recent.normalize()
+
+
+def next_earnings_date(ticker: str) -> pd.Timestamp | None:
+    """Soonest *upcoming* earnings date for `ticker`, or None if unavailable.
+
+    The news-pending watcher uses this — distinct from
+    `latest_earnings_date`, which returns the most recent past print to
+    anchor AVWAPE. Pete's rule: do not hold over earnings (eBook p. 25).
+    """
+    try:
+        t = yf.Ticker(ticker)
+        ed = t.earnings_dates
+    except Exception:
+        return None
+    if ed is None or len(ed) == 0:
+        return None
+
+    idx = ed.index
+    if idx.tz is not None:
+        now = pd.Timestamp.now(tz=idx.tz)
+    else:
+        now = pd.Timestamp.now()
+    future = ed[idx >= now]
+    if future.empty:
+        return None
+    # ed is most-recent-first, so the soonest future date is the last future row.
+    soonest = future.index[-1]
+    if soonest.tz is not None:
+        soonest = soonest.tz_localize(None)
+    return soonest.normalize()

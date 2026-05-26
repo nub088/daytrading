@@ -15,8 +15,9 @@ from pathlib import Path
 import pandas as pd
 
 from tools.data import cache
-from tools.data.fetch_earnings import latest_earnings_date
+from tools.data.fetch_earnings import latest_earnings_date, next_earnings_date
 from tools.data.fetch_intraday import fetch_5min
+from tools.data.macro_calendar import MacroEvent, upcoming_events
 
 OUTPUT_DIR = Path("/home/nublet/Projects/daytrading/output")
 
@@ -103,6 +104,7 @@ def load_daily(ticker: str) -> pd.DataFrame:
 # ---- earnings + intraday caches (in-memory; cleared on app restart) ----
 
 _earnings_cache: dict[str, pd.Timestamp | None] = {}
+_next_earnings_cache: dict[str, pd.Timestamp | None] = {}
 _intraday_cache: dict[str, pd.DataFrame] = {}
 
 
@@ -118,6 +120,20 @@ def get_earnings_date(ticker: str, override: str | None = None) -> pd.Timestamp 
     ed = latest_earnings_date(ticker)
     _earnings_cache[ticker] = ed
     return ed
+
+
+def get_next_earnings_date(ticker: str) -> pd.Timestamp | None:
+    """Next *upcoming* earnings date, cached. Powers the news-pending banner."""
+    if ticker in _next_earnings_cache:
+        return _next_earnings_cache[ticker]
+    ne = next_earnings_date(ticker)
+    _next_earnings_cache[ticker] = ne
+    return ne
+
+
+def get_upcoming_macro_events(window_days: int = 7) -> list[MacroEvent]:
+    """Macro releases falling inside the next `window_days` calendar days."""
+    return upcoming_events(horizon_days=window_days)
 
 
 def load_intraday(ticker: str, period_days: int = 60, force_refresh: bool = False) -> pd.DataFrame:
@@ -140,7 +156,9 @@ def ticker_choices(
     df: pd.DataFrame,
     breakouts_only: bool = False,
     min_rvol: float | None = None,
+    min_rs: float | None = None,
     rvol_col: str = "rvol_21d",
+    rs_col: str = "rrs_21d",
 ) -> list[dict]:
     """Build dropdown options sorted by combined_rank descending.
 
@@ -149,9 +167,12 @@ def ticker_choices(
       - `min_rvol`: drop tickers where `rvol_col` < min_rvol (NaN excluded).
         Default rvol_col is the 21-day window (closest match to Pete's
         "20-day" RVol on the daily).
+      - `min_rs`: drop tickers where `rs_col` < min_rs (NaN excluded).
+        Default rs_col is the 21-day vol-adjusted RRS — its t-stat-like
+        scale (~2-12 for top names) makes thresholds like 2.0 meaningful.
 
     Each option label includes the ticker, rank percentile, breakout
-    flag, and RVol (so the user sees which names are above the threshold).
+    flag, RVol, and RS (so the user sees which names are above thresholds).
     """
     if df.empty:
         return []
@@ -162,6 +183,9 @@ def ticker_choices(
     if min_rvol is not None and rvol_col in work.columns:
         rv = pd.to_numeric(work[rvol_col], errors="coerce")
         work = work[rv > min_rvol]
+    if min_rs is not None and rs_col in work.columns:
+        rs = pd.to_numeric(work[rs_col], errors="coerce")
+        work = work[rs >= min_rs]
     work = work.sort_values("combined_rank", ascending=False, na_position="last")
 
     options = []
@@ -169,6 +193,7 @@ def ticker_choices(
         tkr = row["ticker"]
         rank = row.get("combined_rank", float("nan"))
         rv = row.get(rvol_col, float("nan"))
+        rs = row.get(rs_col, float("nan"))
         flags = ""
         if row.get("broke_long", 0) == 1:
             flags += " ↑"
@@ -176,5 +201,6 @@ def ticker_choices(
             flags += " ↓"
         rank_str = f"{rank*100:.0f}%" if pd.notna(rank) else "—"
         rv_str = f" · RV {rv:.1f}" if pd.notna(rv) else ""
-        options.append({"label": f"{tkr}  ({rank_str}){flags}{rv_str}", "value": tkr})
+        rs_str = f" · RS {rs:.1f}" if pd.notna(rs) else ""
+        options.append({"label": f"{tkr}  ({rank_str}){flags}{rv_str}{rs_str}", "value": tkr})
     return options

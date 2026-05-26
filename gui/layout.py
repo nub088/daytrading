@@ -24,10 +24,12 @@ ID_PREV_BTN = "prev-btn"
 ID_NEXT_BTN = "next-btn"
 ID_BREAKOUTS_FILTER = "breakouts-filter"
 ID_MIN_RVOL_INPUT = "min-rvol-input"
+ID_MIN_RS_INPUT = "min-rs-input"
 ID_EARNINGS_INPUT = "earnings-override"
 ID_DAILY_CHART = "daily-chart"
 ID_INTRADAY_CHART = "intraday-chart"
 ID_METADATA_BAR = "metadata-bar"
+ID_NEWS_BANNER = "news-banner"
 ID_REFRESH_INTRADAY = "refresh-intraday"
 
 
@@ -91,6 +93,27 @@ def build_layout() -> dbc.Container:
             dbc.Col(
                 html.Div(
                     [
+                        html.Label(
+                            "Min RS:",
+                            title="21-day volatility-adjusted relative strength (RRS). 2.0 ~ meaningful outperformance.",
+                            style={"marginRight": "6px", "fontSize": "0.85rem"},
+                        ),
+                        dcc.Input(
+                            id=ID_MIN_RS_INPUT,
+                            type="number",
+                            placeholder="2.0",
+                            step=0.1,
+                            debounce=True,
+                            style={"width": "80px", "fontSize": "0.85rem"},
+                        ),
+                    ],
+                    style={"display": "flex", "alignItems": "center"},
+                ),
+                width="auto",
+            ),
+            dbc.Col(
+                html.Div(
+                    [
                         html.Label("Earnings:", style={"marginRight": "6px", "fontSize": "0.85rem"}),
                         dcc.Input(
                             id=ID_EARNINGS_INPUT,
@@ -125,6 +148,16 @@ def build_layout() -> dbc.Container:
         ],
         align="center",
         className="g-2 mb-2",
+    )
+
+    news_banner = dbc.Row(
+        [
+            dbc.Col(
+                html.Div(id=ID_NEWS_BANNER, style={"fontSize": "0.85rem"}),
+                width=12,
+            ),
+        ],
+        className="mb-2",
     )
 
     metadata = dbc.Row(
@@ -166,7 +199,7 @@ def build_layout() -> dbc.Container:
     )
 
     return dbc.Container(
-        [header, metadata, charts],
+        [header, news_banner, metadata, charts],
         fluid=True,
         style={"padding": "10px"},
     )

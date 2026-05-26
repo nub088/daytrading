@@ -9,6 +9,7 @@ State conventions:
 """
 from __future__ import annotations
 
+import pandas as pd
 from dash import Input, Output, State, ctx, html, no_update
 from dash_bootstrap_templates import ThemeSwitchAIO
 
@@ -21,13 +22,20 @@ from .layout import (
     ID_EARNINGS_INPUT,
     ID_INTRADAY_CHART,
     ID_METADATA_BAR,
+    ID_MIN_RS_INPUT,
     ID_MIN_RVOL_INPUT,
+    ID_NEWS_BANNER,
     ID_NEXT_BTN,
     ID_PREV_BTN,
     ID_REFRESH_INTRADAY,
     ID_TICKER_DROPDOWN,
     THEME_AIO_ID,
 )
+
+# News-banner thresholds (calendar days). Inside RED, treat the event as
+# imminent — Pete: reduce risk and don't open new positions.
+NEWS_WINDOW_DAYS = 7
+NEWS_RED_DAYS = 3
 
 
 def register_callbacks(app) -> None:
@@ -36,18 +44,23 @@ def register_callbacks(app) -> None:
         Output(ID_TICKER_DROPDOWN, "value"),
         Input(ID_BREAKOUTS_FILTER, "value"),
         Input(ID_MIN_RVOL_INPUT, "value"),
+        Input(ID_MIN_RS_INPUT, "value"),
         State(ID_TICKER_DROPDOWN, "value"),
     )
-    def _refilter_dropdown(filter_mode, min_rvol, current_value):
+    def _refilter_dropdown(filter_mode, min_rvol, min_rs, current_value):
         df = data_loader.load_scanner_df()
-        try:
-            min_rvol_val = float(min_rvol) if min_rvol not in (None, "") else None
-        except (TypeError, ValueError):
-            min_rvol_val = None
+
+        def _to_float(v):
+            try:
+                return float(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
         opts = data_loader.ticker_choices(
             df,
             breakouts_only=(filter_mode == "breakouts"),
-            min_rvol=min_rvol_val,
+            min_rvol=_to_float(min_rvol),
+            min_rs=_to_float(min_rs),
         )
         if not opts:
             return [], None
@@ -82,6 +95,7 @@ def register_callbacks(app) -> None:
         Output(ID_DAILY_CHART, "figure"),
         Output(ID_INTRADAY_CHART, "figure"),
         Output(ID_METADATA_BAR, "children"),
+        Output(ID_NEWS_BANNER, "children"),
         Input(ID_TICKER_DROPDOWN, "value"),
         Input(ID_EARNINGS_INPUT, "value"),
         Input(ID_REFRESH_INTRADAY, "n_clicks"),
@@ -97,6 +111,7 @@ def register_callbacks(app) -> None:
                 build_daily_figure("", _empty_df(), template=template),
                 build_intraday_figure("", _empty_df(), template=template),
                 "",
+                _build_news_banner(None),
             )
 
         if ctx.triggered_id == ID_REFRESH_INTRADAY:
@@ -115,12 +130,74 @@ def register_callbacks(app) -> None:
         scanner_df = data_loader.load_scanner_df()
         row = data_loader.get_scanner_row(scanner_df, ticker)
         metadata = _format_metadata(ticker, row, ed)
-        return daily_fig, intraday_fig, metadata
+
+        # ---- News-pending banner ----
+        news = _build_news_banner(ticker)
+        return daily_fig, intraday_fig, metadata, news
 
 
 def _empty_df():
-    import pandas as pd
     return pd.DataFrame()
+
+
+def _warn_pill(text: str, color: str):
+    return html.Span(
+        text,
+        style={
+            "marginRight": "8px",
+            "padding": "4px 10px",
+            "borderRadius": "4px",
+            "background": color,
+            "color": "white",
+            "fontWeight": 600,
+            "fontSize": "0.85rem",
+        },
+    )
+
+
+def _build_news_banner(ticker: str | None) -> list:
+    """Surface pending earnings (per-ticker) and macro events (global).
+
+    Red = inside NEWS_RED_DAYS — Pete's "don't open new positions" zone.
+    Amber = inside NEWS_WINDOW_DAYS but not yet imminent — be aware.
+    Green = nothing flagged inside the window.
+    """
+    items: list = []
+    today = pd.Timestamp.now().normalize()
+
+    # Per-ticker earnings.
+    if ticker:
+        ne = data_loader.get_next_earnings_date(ticker)
+        if ne is not None:
+            days = (ne.normalize() - today).days
+            if 0 <= days <= NEWS_WINDOW_DAYS:
+                color = "#dc2626" if days <= NEWS_RED_DAYS else "#d97706"
+                items.append(
+                    _warn_pill(
+                        f"⚠ {ticker} earnings in {days}d ({ne.strftime('%a %b %d')})",
+                        color,
+                    )
+                )
+
+    # Global macro releases.
+    for ev in data_loader.get_upcoming_macro_events(NEWS_WINDOW_DAYS):
+        days = ev.days_until
+        color = "#dc2626" if days <= NEWS_RED_DAYS else "#d97706"
+        items.append(
+            _warn_pill(
+                f"⚠ {ev.label} in {days}d ({ev.when.strftime('%a %b %d')})",
+                color,
+            )
+        )
+
+    if not items:
+        return [
+            html.Span(
+                f"✓ No major news inside {NEWS_WINDOW_DAYS}-day window",
+                style={"color": "#16a34a", "fontSize": "0.85rem", "fontWeight": 600},
+            )
+        ]
+    return items
 
 
 def _format_metadata(ticker, row, earnings_date) -> list:
