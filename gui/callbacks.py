@@ -10,7 +10,7 @@ State conventions:
 from __future__ import annotations
 
 import pandas as pd
-from dash import Input, Output, Patch, State, ctx, html, no_update
+from dash import Input, Output, State, ctx, html, no_update
 from dash_bootstrap_templates import ThemeSwitchAIO
 
 from . import data_loader
@@ -205,28 +205,44 @@ def _register_measurement_tool(app) -> None:
 def _register_crosshair_sync(app) -> None:
     """Mirror the D1 hovered price as a horizontal line on the 5m chart.
 
-    The intraday figure reserves `shapes[0]` as a hidden placeholder; this
-    callback patches its y0/y1 from the D1 hoverData. Patch leaves all
-    other shapes (premarket H/L, prior close) untouched.
+    Implemented as a *clientside* callback that calls `Plotly.relayout`
+    directly on the chart div. Server-side Patch worked but every update
+    went through Dash's figure prop, which made dcc.Loading flash its
+    spinner — the "blink" the user reported. relayout mutates the chart
+    DOM in place; no figure prop change, no spinner, no flicker.
+
+    The intraday figure reserves `shapes[0]` as a hidden placeholder
+    (set in build_intraday_figure); this callback only touches y0/y1
+    and the visible flag, leaving all other shapes intact.
     """
-    @app.callback(
+    app.clientside_callback(
+        """
+        function(hoverData) {
+            const chart = document.getElementById('intraday-chart');
+            if (!chart || !window.Plotly) {
+                return window.dash_clientside.no_update;
+            }
+            if (!hoverData || !hoverData.points || !hoverData.points.length) {
+                window.Plotly.relayout(chart, {'shapes[0].visible': false});
+                return window.dash_clientside.no_update;
+            }
+            const y = hoverData.points[0].y;
+            if (y == null) {
+                window.Plotly.relayout(chart, {'shapes[0].visible': false});
+                return window.dash_clientside.no_update;
+            }
+            window.Plotly.relayout(chart, {
+                'shapes[0].y0': y,
+                'shapes[0].y1': y,
+                'shapes[0].visible': true
+            });
+            return window.dash_clientside.no_update;
+        }
+        """,
         Output(ID_INTRADAY_CHART, "figure", allow_duplicate=True),
         Input(ID_DAILY_CHART, "hoverData"),
         prevent_initial_call=True,
     )
-    def _sync(hover):
-        patched = Patch()
-        if not hover or not hover.get("points"):
-            patched["layout"]["shapes"][0]["visible"] = False
-            return patched
-        y = hover["points"][0].get("y")
-        if y is None:
-            patched["layout"]["shapes"][0]["visible"] = False
-            return patched
-        patched["layout"]["shapes"][0]["y0"] = y
-        patched["layout"]["shapes"][0]["y1"] = y
-        patched["layout"]["shapes"][0]["visible"] = True
-        return patched
 
 
 def _empty_df():
