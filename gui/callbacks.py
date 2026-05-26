@@ -10,7 +10,7 @@ State conventions:
 from __future__ import annotations
 
 import pandas as pd
-from dash import Input, Output, State, ctx, html, no_update
+from dash import Input, Output, Patch, State, ctx, html, no_update
 from dash_bootstrap_templates import ThemeSwitchAIO
 
 from . import data_loader
@@ -22,6 +22,7 @@ from .layout import (
     ID_EARNINGS_INPUT,
     ID_INTRADAY_CHART,
     ID_MAX_SMA200_AGE_INPUT,
+    ID_MEASURE_DISPLAY,
     ID_METADATA_BAR,
     ID_MIN_RS_INPUT,
     ID_MIN_RVOL_INPUT,
@@ -40,6 +41,9 @@ NEWS_RED_DAYS = 3
 
 
 def register_callbacks(app) -> None:
+    _register_crosshair_sync(app)
+    _register_measurement_tool(app)
+
     @app.callback(
         Output(ID_TICKER_DROPDOWN, "options"),
         Output(ID_TICKER_DROPDOWN, "value"),
@@ -143,6 +147,86 @@ def register_callbacks(app) -> None:
         # ---- News-pending banner ----
         news = _build_news_banner(ticker)
         return daily_fig, intraday_fig, metadata, news
+
+
+def _register_measurement_tool(app) -> None:
+    """Toolbar drawline → display ΔPrice / Δ% / Δbars in the header strip.
+
+    User-drawn shapes on the daily chart are marked `editable=True` by
+    Plotly's drawline tool; algorithmically-added levels are not. We
+    pick the most recent editable shape (the latest drawn line) and
+    compute its endpoint deltas.
+    """
+    @app.callback(
+        Output(ID_MEASURE_DISPLAY, "children"),
+        Input(ID_DAILY_CHART, "relayoutData"),
+        State(ID_DAILY_CHART, "figure"),
+        prevent_initial_call=True,
+    )
+    def _measure(_relayout, fig):
+        if not fig:
+            return ""
+        shapes = (fig.get("layout") or {}).get("shapes") or []
+        user_shapes = [s for s in shapes if s.get("editable")]
+        if not user_shapes:
+            return ""
+        s = user_shapes[-1]
+        try:
+            y0 = float(s["y0"])
+            y1 = float(s["y1"])
+        except (KeyError, TypeError, ValueError):
+            return ""
+        dy = y1 - y0
+        pct = (dy / y0 * 100) if y0 else 0.0
+        # Δbars from x endpoints (daily bars ≈ calendar days minus weekends; we
+        # show calendar-day delta which is close enough for swing context).
+        bar_label = ""
+        try:
+            x0 = pd.to_datetime(s["x0"])
+            x1 = pd.to_datetime(s["x1"])
+            d_days = int(abs((x1 - x0).days))
+            bar_label = f"  ·  Δ{d_days}d"
+        except (KeyError, TypeError, ValueError):
+            pass
+        sign_color = "#16a34a" if dy >= 0 else "#dc2626"
+        return html.Span(
+            f"Δ${dy:+.2f}  ({pct:+.2f}%){bar_label}",
+            style={
+                "padding": "4px 10px",
+                "background": sign_color,
+                "color": "white",
+                "borderRadius": "4px",
+                "fontWeight": 600,
+                "fontSize": "0.85rem",
+            },
+        )
+
+
+def _register_crosshair_sync(app) -> None:
+    """Mirror the D1 hovered price as a horizontal line on the 5m chart.
+
+    The intraday figure reserves `shapes[0]` as a hidden placeholder; this
+    callback patches its y0/y1 from the D1 hoverData. Patch leaves all
+    other shapes (premarket H/L, prior close) untouched.
+    """
+    @app.callback(
+        Output(ID_INTRADAY_CHART, "figure", allow_duplicate=True),
+        Input(ID_DAILY_CHART, "hoverData"),
+        prevent_initial_call=True,
+    )
+    def _sync(hover):
+        patched = Patch()
+        if not hover or not hover.get("points"):
+            patched["layout"]["shapes"][0]["visible"] = False
+            return patched
+        y = hover["points"][0].get("y")
+        if y is None:
+            patched["layout"]["shapes"][0]["visible"] = False
+            return patched
+        patched["layout"]["shapes"][0]["y0"] = y
+        patched["layout"]["shapes"][0]["y1"] = y
+        patched["layout"]["shapes"][0]["visible"] = True
+        return patched
 
 
 def _empty_df():

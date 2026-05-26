@@ -165,6 +165,28 @@ def build_daily_figure(
     fig.update_yaxes(title_text="Price", row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1, secondary_y=False)
     fig.update_yaxes(title_text="RVol", row=2, col=1, secondary_y=True, showgrid=False)
+
+    # ---- Crosshair: full H + V spike lines on the price pane ----
+    spike_kwargs = dict(
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikedash="dot",
+        spikethickness=1,
+        spikecolor="rgba(148,163,184,0.7)",
+    )
+    fig.update_xaxes(**spike_kwargs, row=1, col=1)
+    fig.update_yaxes(**spike_kwargs, row=1, col=1)
+
+    # ---- Measurement tool default style (modebar drawline button) ----
+    # User-drawn shapes are marked editable so the callback can isolate
+    # them from algorithmically-added levels/trendlines.
+    fig.update_layout(
+        newshape=dict(
+            line=dict(color="#0ea5e9", width=2),
+            opacity=0.9,
+        ),
+    )
     return fig
 
 

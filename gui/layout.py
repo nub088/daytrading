@@ -30,6 +30,7 @@ ID_EARNINGS_INPUT = "earnings-override"
 ID_DAILY_CHART = "daily-chart"
 ID_INTRADAY_CHART = "intraday-chart"
 ID_METADATA_BAR = "metadata-bar"
+ID_MEASURE_DISPLAY = "measure-display"
 ID_NEWS_BANNER = "news-banner"
 ID_REFRESH_INTRADAY = "refresh-intraday"
 
@@ -186,7 +187,11 @@ def build_layout() -> dbc.Container:
         [
             dbc.Col(
                 html.Div(id=ID_METADATA_BAR, style={"fontSize": "0.85rem"}),
-                width=12,
+                width=10,
+            ),
+            dbc.Col(
+                html.Div(id=ID_MEASURE_DISPLAY, style={"fontSize": "0.85rem", "textAlign": "right"}),
+                width=2,
             ),
         ],
         className="mb-2",
@@ -198,7 +203,14 @@ def build_layout() -> dbc.Container:
                 dcc.Loading(
                     dcc.Graph(
                         id=ID_DAILY_CHART,
-                        config={"displaylogo": False, "scrollZoom": True},
+                        config={
+                            "displaylogo": False,
+                            "scrollZoom": True,
+                            # Measurement tool: click drawline, drag two points;
+                            # eraseshape removes the line; toggle dragmode buttons
+                            # let users switch between pan/draw.
+                            "modeBarButtonsToAdd": ["drawline", "eraseshape"],
+                        },
                         style={"height": "720px"},
                     ),
                     type="circle",
