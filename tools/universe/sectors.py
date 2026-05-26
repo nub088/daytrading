@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from .. import data  # noqa: F401  (ensures tools/data is a package)
 from ..data.fetch_universe import load_universe
+from .sector_overrides import SECTOR_OVERRIDES
 
 MARKET_REF = "SPY"
 
@@ -44,12 +45,19 @@ NASDAQ_TO_ETF: dict[str, str] = {
 def ticker_to_sector_etf() -> dict[str, str]:
     """Return a mapping of every cached universe ticker → its sector ETF
     (or MARKET_REF if no clean sector mapping).
+
+    Hand-curated overrides in SECTOR_OVERRIDES take precedence over the
+    NASDAQ sector tag, since NASDAQ's labels disagree with GICS for many
+    large caps (notably XLC siblings, TSLA, NEE).
     """
     rows = load_universe()
     mapping: dict[str, str] = {}
     for r in rows:
         sym = (r.get("symbol") or "").strip().upper()
         if not sym:
+            continue
+        if sym in SECTOR_OVERRIDES:
+            mapping[sym] = SECTOR_OVERRIDES[sym]
             continue
         sec = (r.get("sector") or "").strip()
         mapping[sym] = NASDAQ_TO_ETF.get(sec, MARKET_REF)
