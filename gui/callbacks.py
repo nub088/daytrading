@@ -218,10 +218,17 @@ def _register_crosshair_sync(app) -> None:
     app.clientside_callback(
         """
         function(hoverData) {
-            const chart = document.getElementById('intraday-chart');
-            if (!chart || !window.Plotly) {
-                return window.dash_clientside.no_update;
-            }
+            // Find Plotly's actual chart div. dcc.Graph(id='x') renders
+            // <div id='x' class='dash-graph'><div ...><div class='js-plotly-plot'>...</div></div></div>
+            // and Plotly initializes on the .js-plotly-plot child. Walking
+            // by .js-plotly-plot is more reliable than relying on the outer
+            // wrapper across Dash/Plotly versions.
+            if (!window.Plotly) return window.dash_clientside.no_update;
+            const wrap = document.getElementById('intraday-chart');
+            if (!wrap) return window.dash_clientside.no_update;
+            const chart = wrap.querySelector('.js-plotly-plot') || wrap;
+            if (!chart) return window.dash_clientside.no_update;
+
             if (!hoverData || !hoverData.points || !hoverData.points.length) {
                 window.Plotly.relayout(chart, {'shapes[0].visible': false});
                 return window.dash_clientside.no_update;
