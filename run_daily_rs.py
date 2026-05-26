@@ -47,6 +47,7 @@ from tools.signals.rs_vol_adjusted import RSVolAdjusted
 from tools.signals.rs_sector import RSSector
 from tools.signals.rvol import RVol
 from tools.signals.rrv import RRV
+from tools.signals.breakouts import Breakouts
 from tools.ranking.combine import add_percentile_ranks
 from tools.output.to_csv import write_csv
 
@@ -66,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Require last close above SMA(20/50/100/200)")
     parser.add_argument("--above-avwapq", action="store_true",
                         help="Require last close above AVWAPQ")
+    parser.add_argument("--breakouts-long", action="store_true",
+                        help="Only keep tickers that broke a level to the upside today")
+    parser.add_argument("--breakouts-short", action="store_true",
+                        help="Only keep tickers that broke a level to the downside today")
     parser.add_argument("--lookback-days", type=int, default=400)
     parser.add_argument("--no-refresh", action="store_true",
                         help="Skip price refresh; use existing cache only")
@@ -189,6 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     rs_sector = RSSector(window=21)
     rvol = RVol()
     rrv = RRV()
+    breakouts = Breakouts(sma_periods=(200,))
 
     today = datetime.now().date().isoformat()
     rows: list[dict] = []
@@ -216,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         s3 = rs_sector.compute(t, df, market=market_df, sector=sec_df)
         s4 = rvol.compute(t, df, market=market_df)
         s5 = rrv.compute(t, df, market=market_df)
+        s6 = breakouts.compute(t, df, market=market_df)
 
         rows.append({
             "date": today,
@@ -229,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
             "sma_100": round(sma100, 4) if sma100 is not None else None,
             "sma_200": round(sma200, 4) if sma200 is not None else None,
             "avwapq": round(avwq, 4) if avwq is not None else None,
-            **s1, **s2, **s3, **s4, **s5,
+            **s1, **s2, **s3, **s4, **s5, **s6,
         })
 
     if skipped:
@@ -243,6 +250,16 @@ def main(argv: list[str] | None = None) -> int:
     # Drop references from the final output (they're tools, not trades)
     df_ranked = df_ranked[~df_ranked["ticker"].isin(refs - {MARKET_REF})]
     df_ranked = df_ranked[df_ranked["ticker"] != MARKET_REF]
+
+    # Optional post-rank breakout filter (uses breakout flag columns).
+    if args.breakouts_long:
+        before = len(df_ranked)
+        df_ranked = df_ranked[df_ranked["broke_long"] == 1.0]
+        print(f"  --breakouts-long: {len(df_ranked)} of {before} kept")
+    if args.breakouts_short:
+        before = len(df_ranked)
+        df_ranked = df_ranked[df_ranked["broke_short"] == 1.0]
+        print(f"  --breakouts-short: {len(df_ranked)} of {before} kept")
 
     # ---------- 7. Write CSV ----------
     out_path = Path(args.output) if args.output else (

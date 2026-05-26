@@ -37,3 +37,13 @@ def atr_pct_latest(
     if s.empty or pd.isna(s.iloc[-1]):
         return None
     return float(s.iloc[-1])
+
+
+def atr_latest(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 20
+) -> float | None:
+    """Most recent ATR value in price units."""
+    s = atr(high, low, close, period=period)
+    if s.empty or pd.isna(s.iloc[-1]):
+        return None
+    return float(s.iloc[-1])

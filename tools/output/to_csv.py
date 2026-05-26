@@ -19,6 +19,12 @@ COLUMN_ORDER = [
     "sector_vs_spy_rs", "sector_rank",
     "rvol_5d", "rvol_21d", "rvol_rank",
     "rrv_5d", "rrv_21d", "rrv_rank",
+    "broke_long", "broke_short",
+    "broke_horizontal_long", "broke_horizontal_short",
+    "broke_trendline_long", "broke_trendline_short",
+    "broke_sma200_long", "broke_sma200_short",
+    "nearest_resistance", "nearest_support",
+    "dist_to_resistance_atr", "dist_to_support_atr",
     "combined_rank",
 ]
 
