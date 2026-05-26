@@ -203,52 +203,104 @@ def _register_measurement_tool(app) -> None:
 
 
 def _register_crosshair_sync(app) -> None:
-    """Mirror the D1 hovered price as a horizontal line on the 5m chart.
+    """Mirror the D1 cursor price as a horizontal line over the 5m chart.
 
-    Implemented as a *clientside* callback that calls `Plotly.relayout`
-    directly on the chart div. Server-side Patch worked but every update
-    went through Dash's figure prop, which made dcc.Loading flash its
-    spinner — the "blink" the user reported. relayout mutates the chart
-    DOM in place; no figure prop change, no spinner, no flicker.
+    Architecture: the crosshair is a plain HTML <div> (`_crosshair_overlay`,
+    a sibling of the 5m Graph inside a position:relative container) whose
+    `top` is updated on every mousemove. We do NOT call Plotly.relayout
+    on the 5m chart — that triggers the full Plotly relayout pipeline at
+    60Hz, which caused the chart to visibly thrash (axis re-evaluation,
+    rangebreak recompute, drag layer rebuild). The overlay decouples the
+    crosshair from chart state entirely.
 
-    The intraday figure reserves `shapes[0]` as a hidden placeholder
-    (set in build_intraday_figure); this callback only touches y0/y1
-    and the visible flag, leaving all other shapes intact.
+    Math:
+      cursor pixel Y on D1 price pane
+        → D1 price via dailyChart._fullLayout.yaxis.p2c(offsetY)
+        → vertical fraction on 5m price pane via linear interpolation
+          over fiveChart._fullLayout.yaxis.range
+        → CSS top on the overlay, anchored to the 5m price drag layer's
+          getBoundingClientRect (handles pan/zoom: range changes are
+          reflected on the next mousemove).
+
+    Trigger fires on D1 figure changes (ticker / theme) to (re-)attach
+    the mousemove listener if Plotly replaced the drag layer DOM node.
+    A flag on the element keeps the attach idempotent.
     """
     app.clientside_callback(
         """
-        function(hoverData) {
-            // Find Plotly's actual chart div. dcc.Graph(id='x') renders
-            // <div id='x' class='dash-graph'><div ...><div class='js-plotly-plot'>...</div></div></div>
-            // and Plotly initializes on the .js-plotly-plot child. Walking
-            // by .js-plotly-plot is more reliable than relying on the outer
-            // wrapper across Dash/Plotly versions.
-            if (!window.Plotly) return window.dash_clientside.no_update;
-            const wrap = document.getElementById('intraday-chart');
-            if (!wrap) return window.dash_clientside.no_update;
-            const chart = wrap.querySelector('.js-plotly-plot') || wrap;
-            if (!chart) return window.dash_clientside.no_update;
+        function(_figure) {
+            requestAnimationFrame(function() {
+                const dailyWrap = document.getElementById('daily-chart');
+                const fiveWrap = document.getElementById('intraday-chart');
+                const overlay = document.getElementById('_crosshair_overlay');
+                if (!dailyWrap || !fiveWrap || !overlay) return;
+                const dailyChart = dailyWrap.querySelector('.js-plotly-plot');
+                const fiveChart = fiveWrap.querySelector('.js-plotly-plot');
+                if (!dailyChart || !fiveChart) return;
+                if (!dailyChart._fullLayout) return;
 
-            if (!hoverData || !hoverData.points || !hoverData.points.length) {
-                window.Plotly.relayout(chart, {'shapes[0].visible': false});
-                return window.dash_clientside.no_update;
-            }
-            const y = hoverData.points[0].y;
-            if (y == null) {
-                window.Plotly.relayout(chart, {'shapes[0].visible': false});
-                return window.dash_clientside.no_update;
-            }
-            window.Plotly.relayout(chart, {
-                'shapes[0].y0': y,
-                'shapes[0].y1': y,
-                'shapes[0].visible': true
+                // Row 1 (price pane) drag layer; ignore the volume pane.
+                const priceDrag = dailyChart.querySelector('[data-subplot="xy"]');
+                if (!priceDrag) return;
+                if (priceDrag.__crosshairAttached) return;
+                priceDrag.__crosshairAttached = true;
+
+                const overlayParent = overlay.parentElement;
+                let pendingPrice = null;
+                let frameScheduled = false;
+
+                function flush() {
+                    frameScheduled = false;
+                    if (pendingPrice == null || !isFinite(pendingPrice)) return;
+                    const fiveYaxis = fiveChart._fullLayout && fiveChart._fullLayout.yaxis;
+                    const fivePriceDrag = fiveChart.querySelector('[data-subplot="xy"]');
+                    if (!fiveYaxis || !fivePriceDrag || !overlayParent) return;
+                    const range = fiveYaxis.range;
+                    if (!range || range.length !== 2) return;
+                    const ymin = +range[0], ymax = +range[1];
+                    if (!isFinite(ymin) || !isFinite(ymax) || ymax === ymin) return;
+
+                    const dragRect = fivePriceDrag.getBoundingClientRect();
+                    const parentRect = overlayParent.getBoundingClientRect();
+                    // fraction: 0 at top of pane (ymax), 1 at bottom (ymin).
+                    // Clamp to [0, 1] so the line pins to the chart edge when
+                    // the cursor's D1 price is outside the 5m visible range —
+                    // user still gets a "price is above/below" visual cue
+                    // instead of the line silently disappearing.
+                    const rawFrac = (ymax - pendingPrice) / (ymax - ymin);
+                    const fraction = Math.max(0, Math.min(1, rawFrac));
+                    const topPx = (dragRect.top - parentRect.top) + fraction * dragRect.height;
+                    const leftPx = dragRect.left - parentRect.left;
+
+                    overlay.style.top = topPx + 'px';
+                    overlay.style.left = leftPx + 'px';
+                    overlay.style.width = dragRect.width + 'px';
+                    overlay.style.display = 'block';
+                }
+
+                priceDrag.addEventListener('mousemove', function(ev) {
+                    const yaxis = dailyChart._fullLayout && dailyChart._fullLayout.yaxis;
+                    if (!yaxis || typeof yaxis.p2c !== 'function') return;
+                    // event.offsetY on SVG elements is canvas-relative
+                    // (offsetParent quirk), not target-relative, so it includes
+                    // the chart's top margin. Use clientY minus the drag
+                    // rect's top to get a true plot-area-relative pixel.
+                    const r = priceDrag.getBoundingClientRect();
+                    pendingPrice = yaxis.p2c(ev.clientY - r.top);
+                    if (frameScheduled) return;
+                    frameScheduled = true;
+                    requestAnimationFrame(flush);
+                });
+                priceDrag.addEventListener('mouseleave', function() {
+                    pendingPrice = null;
+                    overlay.style.display = 'none';
+                });
             });
             return window.dash_clientside.no_update;
         }
         """,
-        Output(ID_INTRADAY_CHART, "figure", allow_duplicate=True),
-        Input(ID_DAILY_CHART, "hoverData"),
-        prevent_initial_call=True,
+        Output("_crosshair_init", "data"),
+        Input(ID_DAILY_CHART, "figure"),
     )
 
 

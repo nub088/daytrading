@@ -82,20 +82,6 @@ def build_intraday_figure(
         specs=[[{"secondary_y": False}], [{"secondary_y": True}]],
     )
 
-    # ---- D1-hover crosshair placeholder (must stay at shapes[0]) ----
-    # Hidden by default; the clientside sync callback toggles `visible`
-    # and sets y0/y1 to the price the cursor is hovering on the daily
-    # chart. Must use add_shape — add_hline with visible=False silently
-    # drops the shape from layout.shapes (Plotly quirk).
-    initial_y = float(df["close"].iloc[-1])
-    fig.add_shape(
-        type="line",
-        xref="x domain", x0=0, x1=1,
-        yref="y", y0=initial_y, y1=initial_y,
-        line=dict(color="rgba(148,163,184,0.85)", width=1, dash="dot"),
-        visible=False,
-    )
-
     # ---- Candles ----
     fig.add_trace(
         go.Candlestick(

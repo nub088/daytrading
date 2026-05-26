@@ -218,13 +218,42 @@ def build_layout() -> dbc.Container:
                 width=6, style={"paddingRight": "4px"},
             ),
             dbc.Col(
-                dcc.Loading(
-                    dcc.Graph(
-                        id=ID_INTRADAY_CHART,
-                        config={"displaylogo": False, "scrollZoom": True},
-                        style={"height": "720px"},
-                    ),
-                    type="circle",
+                # position:relative so the absolutely-positioned crosshair
+                # overlay stays glued to the 5m chart inside this column.
+                html.Div(
+                    [
+                        dcc.Loading(
+                            dcc.Graph(
+                                id=ID_INTRADAY_CHART,
+                                config={"displaylogo": False, "scrollZoom": True},
+                                style={"height": "720px"},
+                            ),
+                            type="circle",
+                        ),
+                        # Crosshair line — a plain HTML overlay moved by the
+                        # clientside callback. We deliberately do NOT mutate
+                        # the 5m Plotly figure for this; touching shapes via
+                        # Plotly.relayout at 60Hz caused the chart to jiggle.
+                        html.Div(
+                            id="_crosshair_overlay",
+                            style={
+                                "position": "absolute",
+                                "left": "0",
+                                "width": "0",
+                                "height": "0",
+                                # Solid 2px with a contrast halo so it's
+                                # visible against light or dark themes
+                                # and against the busy chart background.
+                                "borderTop": "2px dashed #ef4444",
+                                "boxShadow": "0 0 0 1px rgba(255,255,255,0.55)",
+                                "pointerEvents": "none",
+                                "display": "none",
+                                "zIndex": 5,
+                                "top": "0",
+                            },
+                        ),
+                    ],
+                    style={"position": "relative"},
                 ),
                 width=6, style={"paddingLeft": "4px"},
             ),
@@ -233,7 +262,17 @@ def build_layout() -> dbc.Container:
     )
 
     return dbc.Container(
-        [header, news_banner, metadata, charts],
+        [
+            header,
+            news_banner,
+            metadata,
+            charts,
+            # Sink for the crosshair-sync clientside callback. The callback
+            # attaches DOM listeners on the daily chart and pushes price
+            # updates to the 5m chart via Plotly.relayout — it never needs
+            # to return real data, but Dash requires an Output.
+            dcc.Store(id="_crosshair_init"),
+        ],
         fluid=True,
         style={"padding": "10px"},
     )
