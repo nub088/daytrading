@@ -14,8 +14,7 @@ from pathlib import Path
 
 import requests
 
-UNIVERSE_CSV = Path("/home/nublet/Projects/daytrading/.tmp/universe.csv")
-REFRESH_DAYS = 7
+from tools.config import UNIVERSE_CSV, UNIVERSE_REFRESH_DAYS as REFRESH_DAYS
 
 NASDAQ_URL = "https://api.nasdaq.com/api/screener/stocks"
 NASDAQ_HEADERS = {

@@ -50,8 +50,12 @@ from tools.signals.rrv import RRV
 from tools.signals.breakouts import Breakouts
 from tools.ranking.combine import add_percentile_ranks
 from tools.output.to_csv import write_csv
-
-OUTPUT_DIR = Path("/home/nublet/Projects/daytrading/output")
+from tools.config import (
+    OUTPUT_DIR,
+    DEFAULT_MIN_PRICE,
+    DEFAULT_MIN_VOLUME,
+    DEFAULT_LOOKBACK_DAYS,
+)
 
 
 def _print_step(n: int, msg: str) -> None:
@@ -61,8 +65,8 @@ def _print_step(n: int, msg: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true", help="Run on ~50 tickers only")
-    parser.add_argument("--min-price", type=float, default=5.0)
-    parser.add_argument("--min-volume", type=int, default=1_000_000)
+    parser.add_argument("--min-price", type=float, default=DEFAULT_MIN_PRICE)
+    parser.add_argument("--min-volume", type=int, default=DEFAULT_MIN_VOLUME)
     parser.add_argument("--above-sma", action="store_true",
                         help="Require last close above SMA(20/50/100/200)")
     parser.add_argument("--above-avwapq", action="store_true",
@@ -71,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Only keep tickers that broke a level to the upside today")
     parser.add_argument("--breakouts-short", action="store_true",
                         help="Only keep tickers that broke a level to the downside today")
-    parser.add_argument("--lookback-days", type=int, default=400)
+    parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--no-refresh", action="store_true",
                         help="Skip price refresh; use existing cache only")
     parser.add_argument("--output", type=str, default=None,

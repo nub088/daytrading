@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pandas as pd
 
-CACHE_DIR = Path("/home/nublet/Projects/daytrading/.tmp/prices")
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+from tools.config import PRICE_CACHE_DIR as CACHE_DIR
 
 
 def cache_path(ticker: str) -> Path:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return CACHE_DIR / f"{ticker.upper()}.parquet"
 
 

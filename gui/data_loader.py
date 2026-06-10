@@ -19,8 +19,7 @@ from tools.data.fetch_earnings import latest_earnings_date, next_earnings_date
 from tools.data.fetch_intraday import fetch_5min
 from tools.data.macro_calendar import MacroEvent, upcoming_events
 from tools.signals.breakouts import sma200_cross_up_age
-
-OUTPUT_DIR = Path("/home/nublet/Projects/daytrading/output")
+from tools.config import OUTPUT_DIR
 
 
 @dataclass(frozen=True)
