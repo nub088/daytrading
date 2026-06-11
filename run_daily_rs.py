@@ -39,6 +39,8 @@ from tools.indicators.atr import atr_pct_latest
 from tools.indicators.avwap import avwapq_latest
 from tools.filters.min_price import MinPriceFilter
 from tools.filters.min_volume import MinVolumeFilter
+from tools.filters.min_recent_volume import MinRecentVolumeFilter
+from tools.filters.min_active_volume_sessions import MinActiveVolumeSessionsFilter
 from tools.filters.above_sma import AboveSMAFilter
 from tools.filters.above_avwapq import AboveAVWAPQFilter
 from tools.filters.compose import AndFilter
@@ -49,6 +51,7 @@ from tools.signals.rvol import RVol
 from tools.signals.rrv import RRV
 from tools.signals.breakouts import Breakouts
 from tools.ranking.combine import add_percentile_ranks
+from tools.decision import add_trade_decisions, determine_market_bias
 from tools.output.to_csv import write_csv
 from tools.config import (
     OUTPUT_DIR,
@@ -67,6 +70,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--smoke", action="store_true", help="Run on ~50 tickers only")
     parser.add_argument("--min-price", type=float, default=DEFAULT_MIN_PRICE)
     parser.add_argument("--min-volume", type=int, default=DEFAULT_MIN_VOLUME)
+    parser.add_argument("--min-recent-volume", type=int, default=500_000,
+                        help="Minimum median daily volume over the last 5 sessions; set 0 to disable")
+    parser.add_argument("--min-active-volume", type=int, default=100_000,
+                        help="Minimum per-session volume for active recent sessions; set 0 to disable")
+    parser.add_argument("--active-volume-period", type=int, default=10,
+                        help="Lookback sessions for --min-active-volume")
+    parser.add_argument("--min-active-sessions", type=int, default=8,
+                        help="Required sessions in --active-volume-period with volume >= --min-active-volume")
     parser.add_argument("--above-sma", action="store_true",
                         help="Require last close above SMA(20/50/100/200)")
     parser.add_argument("--above-avwapq", action="store_true",
@@ -75,6 +86,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Only keep tickers that broke a level to the upside today")
     parser.add_argument("--breakouts-short", action="store_true",
                         help="Only keep tickers that broke a level to the downside today")
+    parser.add_argument("--decision", choices=("all", "long", "short", "actionable"),
+                        default="all",
+                        help="Filter final rows by system decision")
     parser.add_argument("--lookback-days", type=int, default=DEFAULT_LOOKBACK_DAYS)
     parser.add_argument("--no-refresh", action="store_true",
                         help="Skip price refresh; use existing cache only")
@@ -140,11 +154,19 @@ def main(argv: list[str] | None = None) -> int:
         _print_step(2, "Skipping price refresh (--no-refresh)")
 
     # ---------- 3. Cheap filters ----------
-    _print_step(4, "Applying cheap filters (min_price, min_volume)...")
+    _print_step(4, "Applying cheap filters (min_price, min_volume, min_recent_volume, active volume sessions)...")
     cheap_filters = [
         MinPriceFilter(args.min_price),
         MinVolumeFilter(args.min_volume, period=20),
     ]
+    if args.min_recent_volume > 0:
+        cheap_filters.append(MinRecentVolumeFilter(args.min_recent_volume, period=5))
+    if args.min_active_volume > 0 and args.min_active_sessions > 0:
+        cheap_filters.append(MinActiveVolumeSessionsFilter(
+            volume_floor=args.min_active_volume,
+            period=args.active_volume_period,
+            min_sessions=args.min_active_sessions,
+        ))
     cheap = AndFilter(cheap_filters)
 
     survivors: list[tuple[str, pd.DataFrame]] = []
@@ -159,8 +181,18 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if cheap.passes(df):
             survivors.append((t, df))
+    recent_vol_label = (
+        f", min_recent_vol={args.min_recent_volume:,}"
+        if args.min_recent_volume > 0
+        else ", min_recent_vol=off"
+    )
+    active_vol_label = (
+        f", active_vol={args.min_active_sessions}/{args.active_volume_period} >= {args.min_active_volume:,}"
+        if args.min_active_volume > 0 and args.min_active_sessions > 0
+        else ", active_vol=off"
+    )
     print(f"  {len(survivors)} of {len(tickers_to_process)} passed "
-          f"(min_price=${args.min_price}, min_vol={args.min_volume:,})")
+          f"(min_price=${args.min_price}, min_vol={args.min_volume:,}{recent_vol_label}{active_vol_label})")
 
     # ---------- 4. Directional filters (optional) ----------
     if args.above_sma or args.above_avwapq:
@@ -255,6 +287,14 @@ def main(argv: list[str] | None = None) -> int:
     df_ranked = df_ranked[~df_ranked["ticker"].isin(refs - {MARKET_REF})]
     df_ranked = df_ranked[df_ranked["ticker"] != MARKET_REF]
 
+    # ---------- 6b. Market-first trade decisions ----------
+    market_bias = determine_market_bias(market_df)
+    print(
+        f"  Market bias: {market_bias.side} ({market_bias.score:+.2f}) - "
+        + "; ".join(market_bias.reasons[:3])
+    )
+    df_ranked = add_trade_decisions(df_ranked, market_bias)
+
     # Optional post-rank breakout filter (uses breakout flag columns).
     if args.breakouts_long:
         before = len(df_ranked)
@@ -264,6 +304,13 @@ def main(argv: list[str] | None = None) -> int:
         before = len(df_ranked)
         df_ranked = df_ranked[df_ranked["broke_short"] == 1.0]
         print(f"  --breakouts-short: {len(df_ranked)} of {before} kept")
+    if args.decision != "all":
+        before = len(df_ranked)
+        if args.decision == "actionable":
+            df_ranked = df_ranked[df_ranked["trade_action"].isin(("long", "short"))]
+        else:
+            df_ranked = df_ranked[df_ranked["trade_action"] == args.decision]
+        print(f"  --decision {args.decision}: {len(df_ranked)} of {before} kept")
 
     # ---------- 7. Write CSV ----------
     out_path = Path(args.output) if args.output else (

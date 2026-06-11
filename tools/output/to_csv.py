@@ -27,6 +27,10 @@ COLUMN_ORDER = [
     "nearest_resistance", "nearest_support",
     "dist_to_resistance_atr", "dist_to_support_atr",
     "combined_rank",
+    "market_bias", "market_bias_score", "trade_action",
+    "setup_score", "direction_score", "timing_score", "risk_score",
+    "stop_reference", "initial_risk_pct", "target_reference", "reward_risk",
+    "decision_reasons",
 ]
 
 

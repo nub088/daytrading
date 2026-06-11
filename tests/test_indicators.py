@@ -10,6 +10,7 @@ import pytest
 from tools.indicators.atr import atr_pct_latest, true_range
 from tools.indicators.avwap import avwap_latest, avwapq_latest
 from tools.indicators.ema import ema, ema_latest
+from tools.indicators.relative_strength import rs_over_time
 from tools.indicators.sma import sma, sma_latest
 from tools.indicators.swings import find_swings, swing_highs, swing_lows
 
@@ -54,6 +55,30 @@ class TestEMA:
         s = ema(flat_ohlcv["close"], 21)
         assert s.iloc[:20].isna().all()
         assert not pd.isna(s.iloc[20])
+
+
+class TestRelativeStrength:
+    def test_rs_over_time_normalizes_to_first_common_bar(self) -> None:
+        idx = pd.bdate_range("2026-01-01", periods=3)
+        stock = pd.Series([100.0, 110.0, 120.0], index=idx)
+        spy = pd.Series([100.0, 100.0, 110.0], index=idx)
+
+        rs = rs_over_time(stock, spy)
+
+        assert rs.iloc[0] == pytest.approx(0.0)
+        assert rs.iloc[1] == pytest.approx(10.0)
+        assert rs.iloc[2] == pytest.approx((1.2 / 1.1 - 1.0) * 100.0)
+
+    def test_rs_over_time_aligns_on_common_dates(self) -> None:
+        stock_idx = pd.bdate_range("2026-01-01", periods=3)
+        spy_idx = pd.bdate_range("2026-01-02", periods=3)
+        stock = pd.Series([100.0, 105.0, 110.0], index=stock_idx)
+        spy = pd.Series([100.0, 102.0, 104.0], index=spy_idx)
+
+        rs = rs_over_time(stock, spy)
+
+        assert list(rs.index) == list(stock_idx.intersection(spy_idx))
+        assert rs.iloc[0] == pytest.approx(0.0)
 
 
 class TestATR:

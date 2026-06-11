@@ -1,4 +1,4 @@
-"""Tests for tools/filters: MinPrice, MinVolume, AboveSMA, AboveAVWAPQ, And."""
+"""Tests for tools/filters: hygiene filters, directional filters, and composition."""
 from __future__ import annotations
 
 from datetime import date
@@ -10,6 +10,8 @@ from tools.filters.above_avwapq import AboveAVWAPQFilter
 from tools.filters.above_sma import AboveSMAFilter
 from tools.filters.compose import AndFilter
 from tools.filters.min_price import MinPriceFilter
+from tools.filters.min_recent_volume import MinRecentVolumeFilter
+from tools.filters.min_active_volume_sessions import MinActiveVolumeSessionsFilter
 from tools.filters.min_volume import MinVolumeFilter
 
 from conftest import N_BARS, make_ohlcv
@@ -49,6 +51,63 @@ class TestMinVolumeFilter:
 
     def test_empty_frame_fails(self) -> None:
         assert not MinVolumeFilter().passes(pd.DataFrame())
+
+
+class TestMinRecentVolumeFilter:
+    def test_passes_when_recent_median_volume_meets_threshold(self, flat_ohlcv: pd.DataFrame) -> None:
+        assert MinRecentVolumeFilter(threshold=1_000_000, period=5).passes(flat_ohlcv)
+
+    def test_fails_stale_spike_volume_with_thin_recent_tape(self, flat_ohlcv: pd.DataFrame) -> None:
+        df = flat_ohlcv.copy()
+        df["volume"] = 5_000_000
+        df.iloc[-5:, df.columns.get_loc("volume")] = [126_500, 69_800, 73_200, 49_200, 77_629]
+
+        assert MinVolumeFilter(threshold=1_000_000, period=20).passes(df)
+        assert not MinRecentVolumeFilter(threshold=500_000, period=5).passes(df)
+
+    def test_short_history_fails(self, short_ohlcv: pd.DataFrame) -> None:
+        assert not MinRecentVolumeFilter(threshold=1, period=5).passes(short_ohlcv.head(4))
+
+    def test_empty_frame_fails(self) -> None:
+        assert not MinRecentVolumeFilter().passes(pd.DataFrame())
+
+
+class TestMinActiveVolumeSessionsFilter:
+    def test_passes_when_enough_recent_sessions_are_active(self, flat_ohlcv: pd.DataFrame) -> None:
+        assert MinActiveVolumeSessionsFilter(
+            volume_floor=100_000,
+            period=10,
+            min_sessions=8,
+        ).passes(flat_ohlcv)
+
+    def test_fails_event_spike_with_sparse_surrounding_sessions(self, flat_ohlcv: pd.DataFrame) -> None:
+        df = flat_ohlcv.copy()
+        df.iloc[-10:, df.columns.get_loc("volume")] = [
+            80_800,
+            6_800,
+            18_000,
+            23_400,
+            60_973_900,
+            789_900,
+            136_600,
+            58_200,
+            1_942_210,
+            52_038_828,
+        ]
+
+        assert MinVolumeFilter(threshold=1_000_000, period=20).passes(df)
+        assert MinRecentVolumeFilter(threshold=500_000, period=5).passes(df)
+        assert not MinActiveVolumeSessionsFilter(
+            volume_floor=100_000,
+            period=10,
+            min_sessions=8,
+        ).passes(df)
+
+    def test_short_history_fails(self, short_ohlcv: pd.DataFrame) -> None:
+        assert not MinActiveVolumeSessionsFilter(period=10).passes(short_ohlcv.head(9))
+
+    def test_empty_frame_fails(self) -> None:
+        assert not MinActiveVolumeSessionsFilter().passes(pd.DataFrame())
 
 
 class TestAboveSMAFilter:

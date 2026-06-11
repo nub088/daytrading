@@ -78,7 +78,9 @@ def backfill(
     Returns a dict mapping ticker → number of rows written.
     Skips tickers that already have a cache file unless skip_if_cached=False.
     """
-    end = datetime.now()
+    # yfinance treats daily `end` as exclusive; request through tomorrow
+    # so an after-close run includes today's completed daily bar.
+    end = datetime.now() + timedelta(days=1)
     start = end - timedelta(days=lookback_days)
 
     todo = [t for t in tickers if not (skip_if_cached and cache.has_cache(t))]
@@ -114,7 +116,9 @@ def refresh(
     sleep_between_chunks: float = 0.5,
 ) -> dict[str, int]:
     """Append the latest days to each cached ticker. Skips tickers with no cache."""
-    end = datetime.now()
+    # yfinance treats daily `end` as exclusive; request through tomorrow
+    # so an after-close run includes today's completed daily bar.
+    end = datetime.now() + timedelta(days=1)
     grouped_by_start: dict[str, list[str]] = {}
 
     for t in tickers:

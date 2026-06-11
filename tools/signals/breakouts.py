@@ -25,7 +25,7 @@ import pandas as pd
 
 from ..indicators.atr import atr_latest
 from ..indicators.sma import sma as sma_series
-from ..levels import find_all_levels
+from ..levels import HorizontalLevel, find_all_levels
 from .base import Signal
 
 
@@ -56,9 +56,11 @@ class Breakouts(Signal):
         sma_periods: tuple[int, ...] = (200,),
         atr_period: int = 20,
         sma200_cross_lookback: int = 10,
+        min_break_atr: float = 0.3,
     ) -> None:
         self.sma_periods = tuple(int(p) for p in sma_periods)
         self.atr_period = int(atr_period)
+        self.min_break_atr = float(min_break_atr)
         # How far back to search for a SMA200 reclaim. The GUI's
         # "Max SMA200 reclaim age" filter must be <= this value.
         self.sma200_cross_lookback = int(sma200_cross_lookback)
@@ -81,6 +83,14 @@ class Breakouts(Signal):
             return nan_out
 
         levels = find_all_levels(ohlcv, sma_periods=self.sma_periods)
+        atr_val = atr_latest(
+            ohlcv["high"], ohlcv["low"], ohlcv["close"], self.atr_period
+        )
+        break_buffer = (
+            self.min_break_atr * atr_val
+            if atr_val is not None and atr_val > 0
+            else 0.0
+        )
 
         broke_long = 0
         broke_short = 0
@@ -95,10 +105,25 @@ class Breakouts(Signal):
             if math.isnan(v_today) or math.isnan(v_yest):
                 continue
 
-            if close_yest < v_yest and close_today > v_today:
+            can_break_long = not (
+                isinstance(lv, HorizontalLevel) and lv.role != "resistance"
+            )
+            can_break_short = not (
+                isinstance(lv, HorizontalLevel) and lv.role != "support"
+            )
+
+            if (
+                can_break_long
+                and close_yest < v_yest
+                and close_today > v_today + break_buffer
+            ):
                 broke_long = 1
                 per_source_long[lv.source] = 1
-            elif close_yest > v_yest and close_today < v_today:
+            elif (
+                can_break_short
+                and close_yest > v_yest
+                and close_today < v_today - break_buffer
+            ):
                 broke_short = 1
                 per_source_short[lv.source] = 1
 
@@ -106,10 +131,6 @@ class Breakouts(Signal):
                 nearest_above = v_today
             if v_today < close_today and v_today > nearest_below:
                 nearest_below = v_today
-
-        atr_val = atr_latest(
-            ohlcv["high"], ohlcv["low"], ohlcv["close"], self.atr_period
-        )
 
         nearest_resistance = nearest_above if nearest_above != math.inf else float("nan")
         nearest_support = nearest_below if nearest_below != -math.inf else float("nan")

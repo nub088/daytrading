@@ -28,7 +28,7 @@ def cache_last_date(ticker: str) -> datetime | None:
     p = cache_path(ticker)
     if not p.exists():
         return None
-    df = pd.read_parquet(p, columns=[])
+    df = pd.read_parquet(p, columns=["close"])
     if df.empty:
         return None
     return df.index.max().to_pydatetime()

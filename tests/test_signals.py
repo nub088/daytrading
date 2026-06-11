@@ -217,6 +217,16 @@ class TestBreakouts:
         assert out["broke_short"] == 0.0
         assert out["broke_horizontal_short"] == 0.0
 
+    def test_crossing_support_up_is_not_long_breakout(self) -> None:
+        phase = np.arange(N_BARS) % 20
+        close = np.where(phase <= 10, 100.0 - 0.5 * phase, 100.0 - 0.5 * (20 - phase))
+        close = close.astype(float)
+        close[-2] = 94.5   # below the repeated swing-low support cluster
+        close[-1] = 95.4   # back above support, but not a resistance breakout
+        out = Breakouts().compute("SUPPORT_RECLAIM", make_ohlcv(close, spread=1.0))
+        assert out["broke_long"] == 0.0
+        assert out["broke_horizontal_long"] == 0.0
+
     def test_no_breakout_in_flat_series(self, flat_ohlcv: pd.DataFrame) -> None:
         out = Breakouts().compute("FLAT", flat_ohlcv)
         assert out["broke_long"] == 0.0

@@ -111,6 +111,8 @@ Confirm the survivor count changes in the expected direction when you toggle it.
 **Hygiene (default ON):**
 - `min_price` (MinPriceFilter) — last close >= threshold. Default $5.
 - `min_volume` (MinVolumeFilter) — N-day avg volume >= threshold. Default 1M shares / 20-day.
+- `min_recent_volume` (MinRecentVolumeFilter) — recent median volume >= threshold. Default 500K shares / 5-day.
+- `min_active_volume_sessions` (MinActiveVolumeSessionsFilter) — enough recent sessions clear a per-session volume floor. Default 8 of 10 sessions >= 100K shares.
 
 **Directional (default OFF, opt-in via CLI):**
 - `above_sma_<period>` (AboveSMAFilter) — last close > SMA(period). Periods 20, 50, 100, 200.

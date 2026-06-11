@@ -30,6 +30,8 @@ class HorizontalLevel(Level):
     last_touch_idx: int    # most recent pivot bar
     first_touch_idx: int   # earliest pivot bar
     strength: float        # recency-weighted touch count
+    high_touches: int      # swing highs in the cluster
+    low_touches: int       # swing lows in the cluster
 
     @property
     def source(self) -> str:
@@ -37,6 +39,15 @@ class HorizontalLevel(Level):
 
     def value_at(self, idx: int) -> float:
         return self.price
+
+    @property
+    def role(self) -> str:
+        """Dominant pivot type: resistance, support, or mixed."""
+        if self.high_touches > self.low_touches:
+            return "resistance"
+        if self.low_touches > self.high_touches:
+            return "support"
+        return "mixed"
 
 
 def _recency_weight(touch_idx: int, today_idx: int, half_life: int) -> float:
@@ -93,6 +104,8 @@ def find_horizontal_levels(
         price = sum(p.price for p in c) / len(c)
         last_idx = max(p.idx for p in c)
         first_idx = min(p.idx for p in c)
+        high_touches = sum(1 for p in c if p.kind == "high")
+        low_touches = sum(1 for p in c if p.kind == "low")
         weight = sum(
             _recency_weight(p.idx, today_idx, recency_half_life) for p in c
         )
@@ -103,6 +116,8 @@ def find_horizontal_levels(
                 last_touch_idx=int(last_idx),
                 first_touch_idx=int(first_idx),
                 strength=float(weight),
+                high_touches=int(high_touches),
+                low_touches=int(low_touches),
             )
         )
     levels.sort(key=lambda lv: abs(lv.price - today_close))
