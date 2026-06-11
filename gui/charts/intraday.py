@@ -1,14 +1,15 @@
 """5-minute-chart Plotly figure factory.
 
 Layout: two stacked panes, shared x-axis. Defaults to the most recent
-two trading sessions (configurable) — that's the window momentum
-traders actually care about.
+four trading sessions (latest session plus three prior sessions), which
+keeps recent context visible without crowding the intraday view.
 
   Top pane     candlesticks + EMA 9/21/50 + session VWAP +
                premarket high/low (dashed, per session) +
-               prior day close (dashed, per session).
-  Bottom pane  volume bars (primary y) + interval-matched intraday
-               RVol line (secondary y, reference at 1.0).
+               prior day close (dashed, per session) + price alerts.
+  Bottom pane  combined indicator pane: volume bars + 10-bar
+               relative-volume line (left axis) and RS% versus SPY
+               (right axis), zero lines aligned.
 
 5-min data is fetched on demand from yfinance (60-day limit). Session
 boundaries are detected from the bar timestamps' dates.
@@ -16,21 +17,29 @@ boundaries are detected from the bar timestamps' dates.
 from __future__ import annotations
 
 import pandas as pd
-from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
+from tools.alerts import PriceAlert
 from tools.indicators.ema import ema
 from tools.indicators.intraday_vwap import session_vwap
-from tools.indicators.intraday_rvol import intraday_rvol
+from tools.indicators.relative_strength import rs_over_time
+from tools.indicators.volume import avg_volume
 
+from .common import (
+    add_alert_lines,
+    add_candles,
+    add_indicator_pane,
+    apply_base_layout,
+    empty_figure,
+    two_pane_figure,
+)
 
 EMA_COLORS = {
     9: "#f59e0b",    # amber
     21: "#3b82f6",   # blue
     50: "#a855f7",   # purple
 }
-VWAP_COLOR = "#0ea5e9"             # sky
-RVOL_LINE_COLOR = "#f97316"        # orange
+VWAP_COLOR = "#7c3aed"             # purple
 PRIOR_CLOSE_COLOR = "rgba(148,163,184,0.85)"  # slate
 PREMARKET_COLOR = "rgba(99, 102, 241, 0.55)"  # indigo
 
@@ -42,8 +51,10 @@ RTH_CLOSE = pd.Timestamp("16:00").time()
 def build_intraday_figure(
     ticker: str,
     ohlcv: pd.DataFrame,
-    sessions_to_show: int = 2,
+    market_ohlcv: pd.DataFrame | None = None,
+    sessions_to_show: int = 4,
     template: str = "flatly",
+    alerts: list[PriceAlert] | None = None,
 ) -> go.Figure:
     """Build the 5-min chart figure for `ticker`.
 
@@ -54,7 +65,7 @@ def build_intraday_figure(
     `template` is a registered Plotly template name ("flatly" / "darkly").
     """
     if ohlcv.empty:
-        return _empty_figure(f"{ticker} — no intraday data available", template=template)
+        return empty_figure(f"{ticker} — no intraday data available", template=template)
 
     full = ohlcv.copy()
 
@@ -62,7 +73,7 @@ def build_intraday_figure(
     # warmed-up values.
     ema_full = {p: ema(full["close"], p) for p in EMA_COLORS}
     vwap_full = session_vwap(full)
-    rvol_full = intraday_rvol(full, lookback_sessions=20)
+    rvol_full = full["volume"] - avg_volume(full["volume"], period=10)
 
     # Clip to the most recent N sessions for plotting.
     unique_dates = sorted(set(full.index.date))
@@ -70,27 +81,12 @@ def build_intraday_figure(
     plot_mask = pd.Series([d in keep_dates for d in full.index.date], index=full.index)
     df = full[plot_mask]
     if df.empty:
-        return _empty_figure(f"{ticker} — no intraday data in window")
+        return empty_figure(f"{ticker} — no intraday data in window", template=template)
 
     x = df.index
 
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.78, 0.22],
-        specs=[[{"secondary_y": False}], [{"secondary_y": True}]],
-    )
-
-    # ---- Candles ----
-    fig.add_trace(
-        go.Candlestick(
-            x=x, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
-            name="price", increasing_line_color="#10b981", decreasing_line_color="#ef4444",
-            showlegend=False,
-        ),
-        row=1, col=1,
-    )
+    fig = two_pane_figure()
+    add_candles(fig, df)
 
     # ---- EMAs ----
     for period, color in EMA_COLORS.items():
@@ -104,11 +100,10 @@ def build_intraday_figure(
         )
 
     # ---- Session VWAP ----
-    vwap_window = vwap_full.reindex(df.index)
     fig.add_trace(
         go.Scatter(
-            x=x, y=vwap_window, mode="lines", name="VWAP",
-            line=dict(color=VWAP_COLOR, width=1.8),
+            x=x, y=vwap_full.reindex(df.index), mode="lines", name="VWAP",
+            line=dict(color=VWAP_COLOR, width=2.8),
         ),
         row=1, col=1,
     )
@@ -116,57 +111,24 @@ def build_intraday_figure(
     # ---- Per-session overlays: premarket H/L and prior day close ----
     _draw_session_overlays(fig, full, df)
 
-    # ---- Volume bars + RVol line ----
-    bar_colors = ["#10b981" if c >= o else "#ef4444"
-                  for c, o in zip(df["close"], df["open"])]
-    fig.add_trace(
-        go.Bar(
-            x=x, y=df["volume"], name="volume", marker_color=bar_colors,
-            opacity=0.55, showlegend=False, hovertemplate="%{y:,}<extra></extra>",
-        ),
-        row=2, col=1, secondary_y=False,
-    )
+    # ---- Price alerts ----
+    add_alert_lines(fig, alerts, x0=df.index[0], x1=df.index[-1])
 
-    rvol_window = rvol_full.reindex(df.index)
-    fig.add_trace(
-        go.Scatter(
-            x=x, y=rvol_window, name="RVol (ToD)", mode="lines",
-            line=dict(color=RVOL_LINE_COLOR, width=1.4),
-            hovertemplate="RVol %{y:.2f}<extra></extra>",
-        ),
-        row=2, col=1, secondary_y=True,
-    )
-    fig.add_hline(
-        y=1.0, line=dict(color="rgba(148,163,184,0.6)", width=1, dash="dot"),
-        row=2, col=1, secondary_y=True,
-    )
+    # ---- Combined indicator pane: volume + RVol + RS vs SPY ----
+    rs = None
+    if market_ohlcv is not None and not market_ohlcv.empty and "close" in market_ohlcv:
+        market_window = market_ohlcv.reindex(df.index)
+        rs = rs_over_time(df["close"], market_window["close"]).reindex(df.index)
+    add_indicator_pane(fig, df, rvol_full.reindex(df.index), rs)
 
-    fig.update_layout(
-        title=f"{ticker}  ·  5-min",
-        height=720,
-        margin=dict(l=10, r=10, t=40, b=20),
-        xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        template=template,
-        dragmode="pan",
-        hovermode="x unified",
+    apply_base_layout(
+        fig, title=f"{ticker}  ·  5-min", template=template, uirevision=ticker
     )
     # Hide non-trading gaps (overnight, weekend) so candles pack together.
     fig.update_xaxes(rangebreaks=[
         dict(bounds=["sat", "mon"]),
-        dict(bounds=[16.5, 8], pattern="hour"),  # after-hours/premarket gap
+        dict(bounds=[16, 9.5], pattern="hour"),  # regular-hours feed: 4pm -> 9:30am
     ])
-    fig.update_yaxes(title_text="Price", row=1, col=1)
-    fig.update_yaxes(title_text="Volume", row=2, col=1, secondary_y=False)
-    fig.update_yaxes(title_text="RVol", row=2, col=1, secondary_y=True, showgrid=False)
-
-    # Measurement tool style — matches the daily chart so drawline shapes
-    # are visually consistent across panes. User-drawn shapes are marked
-    # editable automatically, which the measurement callback uses to
-    # isolate them from algorithmically-added overlays.
-    fig.update_layout(
-        newshape=dict(line=dict(color="#0ea5e9", width=2), opacity=0.9),
-    )
     return fig
 
 
@@ -185,15 +147,15 @@ def _draw_session_overlays(fig: go.Figure, full: pd.DataFrame, plot_df: pd.DataF
 
     for d in unique_dates:
         day_mask = full.index.date == d
+        session_start = full.index[day_mask][0]
+        session_end = full.index[day_mask][-1]
 
         # Premarket H/L for this session
         pm_mask = day_mask & premarket_mask_full
         if pm_mask.any():
             pm_high = float(full.loc[pm_mask, "high"].max())
             pm_low = float(full.loc[pm_mask, "low"].min())
-            session_start = full.index[day_mask][0]
-            session_end = full.index[day_mask][-1]
-            for y, label in ((pm_high, "PM high"), (pm_low, "PM low")):
+            for y in (pm_high, pm_low):
                 fig.add_shape(
                     type="line",
                     x0=session_start, x1=session_end, y0=y, y1=y,
@@ -205,30 +167,13 @@ def _draw_session_overlays(fig: go.Figure, full: pd.DataFrame, plot_df: pd.DataF
         prior_candidates = [pd_ for pd_ in prior_dates if pd_ < d]
         if not prior_candidates:
             continue
-        prior_day = prior_candidates[-1]
-        prior_mask = (full.index.date == prior_day) & rth_mask_full
+        prior_mask = (full.index.date == prior_candidates[-1]) & rth_mask_full
         if not prior_mask.any():
             continue
         prior_close = float(full.loc[prior_mask, "close"].iloc[-1])
-        session_start = full.index[day_mask][0]
-        session_end = full.index[day_mask][-1]
         fig.add_shape(
             type="line",
             x0=session_start, x1=session_end, y0=prior_close, y1=prior_close,
             line=dict(color=PRIOR_CLOSE_COLOR, width=1.2, dash="dot"),
             row=1, col=1,
         )
-
-
-def _empty_figure(message: str, template: str = "flatly") -> go.Figure:
-    fig = go.Figure()
-    fig.add_annotation(
-        text=message, xref="paper", yref="paper",
-        x=0.5, y=0.5, showarrow=False, font=dict(size=16, color="#94a3b8"),
-    )
-    fig.update_layout(
-        height=720, template=template,
-        margin=dict(l=10, r=10, t=40, b=20),
-        xaxis=dict(visible=False), yaxis=dict(visible=False),
-    )
-    return fig

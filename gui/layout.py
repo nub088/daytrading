@@ -1,8 +1,8 @@
 """Dash page layout.
 
 A single-page app with:
-  - Header: ticker dropdown, prev/next, breakouts-only filter,
-    earnings-date override, scanner-metadata strip.
+  - Header: ticker dropdown, prev/next, scanner filters,
+    scanner-metadata strip.
   - Body: two side-by-side panels for the daily and 5-min charts.
 
 All component IDs are defined as module constants so callbacks can
@@ -26,13 +26,19 @@ ID_BREAKOUTS_FILTER = "breakouts-filter"
 ID_MIN_RVOL_INPUT = "min-rvol-input"
 ID_MIN_RS_INPUT = "min-rs-input"
 ID_MAX_SMA200_AGE_INPUT = "max-sma200-age-input"
-ID_EARNINGS_INPUT = "earnings-override"
 ID_DAILY_CHART = "daily-chart"
 ID_INTRADAY_CHART = "intraday-chart"
 ID_METADATA_BAR = "metadata-bar"
 ID_MEASURE_DISPLAY = "measure-display"
 ID_NEWS_BANNER = "news-banner"
 ID_REFRESH_INTRADAY = "refresh-intraday"
+ID_SHOW_HISTORICAL_LEVELS = "show-historical-levels"
+ID_ALERT_PRICE_INPUT = "alert-price-input"
+ID_ALERT_ADD_BTN = "alert-add-btn"
+ID_ALERT_LIST = "alert-list"
+# Monotonic counter bumped by alert add/remove; the chart-render
+# callback listens to it so new alert lines appear immediately.
+ID_ALERTS_VERSION = "alerts-version"
 
 
 def build_layout() -> dbc.Container:
@@ -135,18 +141,16 @@ def build_layout() -> dbc.Container:
                 width="auto",
             ),
             dbc.Col(
-                html.Div(
-                    [
-                        html.Label("Earnings:", style={"marginRight": "6px", "fontSize": "0.85rem"}),
-                        dcc.Input(
-                            id=ID_EARNINGS_INPUT,
-                            type="text",
-                            placeholder="YYYY-MM-DD",
-                            debounce=True,
-                            style={"width": "120px", "fontSize": "0.85rem"},
-                        ),
-                    ],
-                    style={"display": "flex", "alignItems": "center"},
+                dbc.Checklist(
+                    id=ID_SHOW_HISTORICAL_LEVELS,
+                    options=[{"label": "Historical S/R", "value": "show"}],
+                    value=[],
+                    switch=True,
+                    inline=True,
+                    persistence=True,
+                    persistence_type="local",
+                    inputStyle={"marginRight": "4px"},
+                    labelStyle={"fontSize": "0.85rem"},
                 ),
                 width="auto",
             ),
@@ -181,6 +185,49 @@ def build_layout() -> dbc.Container:
             ),
         ],
         className="mb-2",
+    )
+
+    alerts_row = dbc.Row(
+        [
+            dbc.Col(
+                html.Div(
+                    [
+                        html.Label(
+                            "⏰ Alert @",
+                            title="Price alert for the selected ticker. Checked against "
+                                  "daily bars for now; will move to live IBKR data later.",
+                            style={"marginRight": "6px", "fontSize": "0.85rem", "whiteSpace": "nowrap"},
+                        ),
+                        dcc.Input(
+                            id=ID_ALERT_PRICE_INPUT,
+                            type="number",
+                            placeholder="price",
+                            min=0, step=0.01,
+                            style={"width": "100px", "fontSize": "0.85rem"},
+                        ),
+                        dbc.Button(
+                            "Add",
+                            id=ID_ALERT_ADD_BTN,
+                            color="warning",
+                            outline=True,
+                            size="sm",
+                            style={"marginLeft": "6px"},
+                        ),
+                    ],
+                    style={"display": "flex", "alignItems": "center"},
+                ),
+                width="auto",
+            ),
+            dbc.Col(
+                html.Div(
+                    id=ID_ALERT_LIST,
+                    style={"display": "flex", "flexWrap": "wrap", "alignItems": "center", "gap": "6px"},
+                ),
+                width=True,
+            ),
+        ],
+        align="center",
+        className="g-2 mb-2",
     )
 
     metadata = dbc.Row(
@@ -269,6 +316,7 @@ def build_layout() -> dbc.Container:
         [
             header,
             news_banner,
+            alerts_row,
             metadata,
             charts,
             # Sink for the crosshair-sync clientside callback. The callback
@@ -276,6 +324,7 @@ def build_layout() -> dbc.Container:
             # updates to the 5m chart via Plotly.relayout — it never needs
             # to return real data, but Dash requires an Output.
             dcc.Store(id="_crosshair_init"),
+            dcc.Store(id=ID_ALERTS_VERSION, data=0),
         ],
         fluid=True,
         style={"padding": "10px"},

@@ -19,6 +19,10 @@ OUTPUT_DIR = Path(os.environ.get("DAYTRADING_OUTPUT_DIR", REPO_ROOT / "output"))
 PRICE_CACHE_DIR = TMP_DIR / "prices"
 UNIVERSE_CSV = TMP_DIR / "universe.csv"
 
+# Price alerts live in output/ (not .tmp/) because they are user state,
+# not a regenerable cache.
+ALERTS_FILE = OUTPUT_DIR / "alerts.json"
+
 # Scanner defaults (CLI flags override these)
 DEFAULT_MIN_PRICE = 5.0
 DEFAULT_MIN_VOLUME = 1_000_000

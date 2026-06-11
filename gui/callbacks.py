@@ -4,22 +4,26 @@ State conventions:
   - The dropdown is the single source of truth for the current ticker.
   - Prev/Next buttons rotate through the current dropdown options.
   - The breakouts filter rebuilds the dropdown options list.
-  - Earnings override is a free-text input; empty string = use yfinance
-    default; an invalid date silently disables AVWAPE for that ticker.
+  - Earnings warnings and chart event markers are sourced from yfinance.
 """
 from __future__ import annotations
 
 import pandas as pd
-from dash import Input, Output, State, ctx, html, no_update
+from dash import ALL, Input, Output, State, ctx, html, no_update
 from dash_bootstrap_templates import ThemeSwitchAIO
+
+from tools import alerts as alerts_store
 
 from . import data_loader
 from .charts.daily import build_daily_figure
 from .charts.intraday import build_intraday_figure
 from .layout import (
+    ID_ALERT_ADD_BTN,
+    ID_ALERT_LIST,
+    ID_ALERT_PRICE_INPUT,
+    ID_ALERTS_VERSION,
     ID_BREAKOUTS_FILTER,
     ID_DAILY_CHART,
-    ID_EARNINGS_INPUT,
     ID_INTRADAY_CHART,
     ID_MAX_SMA200_AGE_INPUT,
     ID_MEASURE_DISPLAY,
@@ -30,6 +34,7 @@ from .layout import (
     ID_NEXT_BTN,
     ID_PREV_BTN,
     ID_REFRESH_INTRADAY,
+    ID_SHOW_HISTORICAL_LEVELS,
     ID_TICKER_DROPDOWN,
     THEME_AIO_ID,
 )
@@ -43,6 +48,7 @@ NEWS_RED_DAYS = 3
 def register_callbacks(app) -> None:
     _register_crosshair_sync(app)
     _register_measurement_tool(app)
+    _register_alerts(app)
 
     @app.callback(
         Output(ID_TICKER_DROPDOWN, "options"),
@@ -109,12 +115,14 @@ def register_callbacks(app) -> None:
         Output(ID_INTRADAY_CHART, "figure"),
         Output(ID_METADATA_BAR, "children"),
         Output(ID_NEWS_BANNER, "children"),
+        Output(ID_ALERT_LIST, "children"),
         Input(ID_TICKER_DROPDOWN, "value"),
-        Input(ID_EARNINGS_INPUT, "value"),
         Input(ID_REFRESH_INTRADAY, "n_clicks"),
+        Input(ID_SHOW_HISTORICAL_LEVELS, "value"),
         Input(ThemeSwitchAIO.ids.switch(THEME_AIO_ID), "value"),
+        Input(ID_ALERTS_VERSION, "data"),
     )
-    def _render_charts(ticker, earnings_override, refresh_clicks, theme_is_light):
+    def _render_charts(ticker, refresh_clicks, historical_levels, theme_is_light, _alerts_version):
         # ThemeSwitchAIO emits True for the first theme (FLATLY/light),
         # False for the second (DARKLY/dark). Default to light if unset.
         template = "flatly" if theme_is_light in (True, None) else "darkly"
@@ -125,19 +133,38 @@ def register_callbacks(app) -> None:
                 build_intraday_figure("", _empty_df(), template=template),
                 "",
                 _build_news_banner(None),
+                [],
             )
 
         if ctx.triggered_id == ID_REFRESH_INTRADAY:
             data_loader.clear_intraday_cache(ticker)
+            data_loader.clear_intraday_cache("SPY")
 
         # ---- Daily ----
         daily_df = data_loader.load_daily(ticker)
-        ed = data_loader.get_earnings_date(ticker, override=earnings_override or None)
-        daily_fig = build_daily_figure(ticker, daily_df, earnings_date=ed, template=template)
+        market_df = data_loader.load_daily("SPY")
+        ed = data_loader.get_earnings_date(ticker)
+        ticker_alerts = _refresh_ticker_alerts(ticker, daily_df)
+        daily_fig = build_daily_figure(
+            ticker,
+            daily_df,
+            market_ohlcv=market_df,
+            earnings_date=ed,
+            template=template,
+            show_historical_levels="show" in (historical_levels or []),
+            alerts=ticker_alerts,
+        )
 
         # ---- 5-min ----
         intraday_df = data_loader.load_intraday(ticker)
-        intraday_fig = build_intraday_figure(ticker, intraday_df, template=template)
+        intraday_market_df = data_loader.load_intraday("SPY")
+        intraday_fig = build_intraday_figure(
+            ticker,
+            intraday_df,
+            market_ohlcv=intraday_market_df,
+            template=template,
+            alerts=ticker_alerts,
+        )
 
         # ---- Metadata bar ----
         scanner_df = data_loader.load_scanner_df()
@@ -145,8 +172,115 @@ def register_callbacks(app) -> None:
         metadata = _format_metadata(ticker, row, ed)
 
         # ---- News-pending banner ----
-        news = _build_news_banner(ticker)
-        return daily_fig, intraday_fig, metadata, news
+        news = _build_news_banner(ticker, daily_ohlcv=daily_df)
+        return daily_fig, intraday_fig, metadata, news, _render_alert_pills(ticker_alerts)
+
+
+def _register_alerts(app) -> None:
+    """Price-alert add/remove. Both bump the alerts-version store, which
+    the chart-render callback listens to, so lines and pills refresh in
+    one round trip."""
+
+    @app.callback(
+        Output(ID_ALERTS_VERSION, "data"),
+        Output(ID_ALERT_PRICE_INPUT, "value"),
+        Input(ID_ALERT_ADD_BTN, "n_clicks"),
+        State(ID_ALERT_PRICE_INPUT, "value"),
+        State(ID_TICKER_DROPDOWN, "value"),
+        State(ID_ALERTS_VERSION, "data"),
+        prevent_initial_call=True,
+    )
+    def _add_alert(_clicks, price, ticker, version):
+        if not ticker or price in (None, ""):
+            return no_update, no_update
+        try:
+            alerts_store.add_alert(ticker, price)
+        except ValueError:
+            return no_update, no_update
+        return (version or 0) + 1, None  # clear the input on success
+
+    @app.callback(
+        Output(ID_ALERTS_VERSION, "data", allow_duplicate=True),
+        Input({"type": "alert-remove", "id": ALL}, "n_clicks"),
+        State(ID_ALERTS_VERSION, "data"),
+        prevent_initial_call=True,
+    )
+    def _remove_alert(n_clicks_list, version):
+        # Pattern-matching callbacks also fire when pills are (re)created
+        # with n_clicks=0 — only a real click should delete.
+        if not isinstance(ctx.triggered_id, dict) or not any(n_clicks_list or []):
+            return no_update
+        if not alerts_store.remove_alert(str(ctx.triggered_id.get("id"))):
+            return no_update
+        return (version or 0) + 1
+
+
+def _refresh_ticker_alerts(ticker: str, daily_ohlcv: pd.DataFrame) -> list[alerts_store.PriceAlert]:
+    """Run the EOD trigger check against the latest daily bar, then return
+    the ticker's alerts with up-to-date triggered state.
+
+    With end-of-day data this is the best we can do; once the live IBRK
+    feed lands, `check_alerts` gets called per tick instead.
+    """
+    if not daily_ohlcv.empty:
+        bar = daily_ohlcv.iloc[-1]
+        try:
+            alerts_store.check_alerts(
+                ticker,
+                bar_high=float(bar["high"]),
+                bar_low=float(bar["low"]),
+                as_of=pd.Timestamp(daily_ohlcv.index[-1]).isoformat(),
+            )
+        except (TypeError, ValueError, KeyError):
+            pass
+    return alerts_store.alerts_for(ticker)
+
+
+def _render_alert_pills(ticker_alerts: list[alerts_store.PriceAlert]) -> list:
+    """Inline pills for the alert row: amber while armed, slate once hit."""
+    if not ticker_alerts:
+        return [html.Span("no alerts for this ticker", style={"color": "#94a3b8", "fontSize": "0.8rem"})]
+    pills = []
+    for a in sorted(ticker_alerts, key=lambda a: a.price):
+        if a.active:
+            bg = "#f59e0b"
+            label = f"⏰ {a.price:.2f}"
+        else:
+            bg = "#64748b"
+            label = f"✓ hit {a.price:.2f}"
+        pills.append(
+            html.Span(
+                [
+                    html.Span(label, style={"marginRight": "6px"}),
+                    html.Button(
+                        "×",
+                        id={"type": "alert-remove", "id": a.id},
+                        n_clicks=0,
+                        title="Remove alert",
+                        style={
+                            "border": "none",
+                            "background": "transparent",
+                            "color": "white",
+                            "cursor": "pointer",
+                            "fontWeight": 700,
+                            "padding": "0",
+                            "lineHeight": "1",
+                        },
+                    ),
+                ],
+                style={
+                    "padding": "3px 8px",
+                    "borderRadius": "4px",
+                    "background": bg,
+                    "color": "white",
+                    "fontWeight": 600,
+                    "fontSize": "0.8rem",
+                    "display": "inline-flex",
+                    "alignItems": "center",
+                },
+            )
+        )
+    return pills
 
 
 def _register_measurement_tool(app) -> None:
@@ -336,17 +470,22 @@ def _warn_pill(text: str, color: str):
     )
 
 
-def _build_news_banner(ticker: str | None) -> list:
-    """Surface pending earnings (per-ticker) and macro events (global).
+def _build_news_banner(
+    ticker: str | None,
+    daily_ohlcv: pd.DataFrame | None = None,
+) -> list:
+    """Surface earnings context (per-ticker) and macro events (global).
 
-    Red = inside NEWS_RED_DAYS — Pete's "don't open new positions" zone.
-    Amber = inside NEWS_WINDOW_DAYS but not yet imminent — be aware.
+    Red = imminent upcoming earnings, or a large post-earnings move.
+    Amber = earnings/news inside the broader watch window.
     Green = nothing flagged inside the window.
     """
     items: list = []
     today = pd.Timestamp.now().normalize()
 
-    # Per-ticker earnings.
+    # Per-ticker earnings. Upcoming earnings warns against holding through
+    # binary risk; recent past earnings flags that price may be moving because
+    # of the report.
     if ticker:
         ne = data_loader.get_next_earnings_date(ticker)
         if ne is not None:
@@ -359,6 +498,23 @@ def _build_news_banner(ticker: str | None) -> list:
                         color,
                     )
                 )
+
+        ed = data_loader.get_earnings_date(ticker)
+        if ed is not None:
+            days_ago = (today - ed.normalize()).days
+            if 0 <= days_ago <= NEWS_WINDOW_DAYS:
+                move = _post_earnings_move(daily_ohlcv, ed)
+                if move is None:
+                    label = f"⚠ {ticker} reported earnings {days_ago}d ago ({ed.strftime('%a %b %d')})"
+                    color = "#d97706"
+                else:
+                    move_label = f"{move:+.1f}%"
+                    label = (
+                        f"⚠ {ticker} post-earnings move {move_label} "
+                        f"since {ed.strftime('%a %b %d')}"
+                    )
+                    color = "#dc2626" if abs(move) >= 5 else "#d97706"
+                items.append(_warn_pill(label, color))
 
     # Global macro releases.
     for ev in data_loader.get_upcoming_macro_events(NEWS_WINDOW_DAYS):
@@ -379,6 +535,35 @@ def _build_news_banner(ticker: str | None) -> list:
             )
         ]
     return items
+
+
+def _post_earnings_move(daily_ohlcv: pd.DataFrame | None, earnings_date: pd.Timestamp) -> float | None:
+    """Return close-to-close % move from the prior bar to the earnings bar.
+
+    Uses the first trading bar on or after the earnings date because reports
+    can land before the open, after the close, or on non-trading days.
+    """
+    if daily_ohlcv is None or daily_ohlcv.empty or "close" not in daily_ohlcv.columns:
+        return None
+    work = daily_ohlcv.sort_index()
+    if not isinstance(work.index, pd.DatetimeIndex):
+        work = work.copy()
+        work.index = pd.to_datetime(work.index)
+    closes = work["close"].dropna()
+    if closes.empty:
+        return None
+    normalized_index = closes.index.normalize()
+    candidates = normalized_index >= pd.Timestamp(earnings_date).normalize()
+    if not candidates.any():
+        return None
+    event_pos = int(candidates.argmax())
+    if event_pos == 0:
+        return None
+    prev_close = float(closes.iloc[event_pos - 1])
+    event_close = float(closes.iloc[event_pos])
+    if prev_close == 0:
+        return None
+    return (event_close / prev_close - 1.0) * 100.0
 
 
 def _format_metadata(ticker, row, earnings_date) -> list:

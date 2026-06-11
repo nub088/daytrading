@@ -65,9 +65,14 @@ Useful flags:
 |---|---|---|
 | `--min-price <float>` | 5.0 | Drop cheap stocks |
 | `--min-volume <int>` | 1,000,000 | Drop illiquid stocks (20-day avg) |
+| `--min-recent-volume <int>` | 500,000 | Drop stale-volume names whose median volume over the last 5 sessions is too low; set `0` to disable |
+| `--min-active-volume <int>` | 100,000 | Require enough recent sessions to trade at least this many shares; set `0` to disable |
+| `--active-volume-period <int>` | 10 | Lookback sessions for `--min-active-volume` |
+| `--min-active-sessions <int>` | 8 | Required sessions in the active-volume lookback |
 | `--above-sma` | off | Require close above SMA 20/50/100/200 |
 | `--above-avwapq` | off | Require close above quarterly anchored VWAP |
 | `--breakouts-long` / `--breakouts-short` | off | Only tickers with a directional breakout today |
+| `--decision <all\|long\|short\|actionable>` | `all` | Filter by the market-first decision layer |
 | `--lookback-days <int>` | 400 | History window for backfill |
 | `--no-refresh` | off | Skip downloads, use cached prices only |
 | `--output <path>` | `output/rs_<DATE>.csv` | Custom output path |
@@ -83,6 +88,8 @@ The GUI shows, for each ticker in the latest scan:
 
 - **Daily chart** — candles, SMA stack, support/resistance levels, breakout markers
 - **5-minute chart** — intraday candles with VWAP (fetched on demand; yfinance limits intraday history to ~60 days)
+- A combined indicator pane under each chart: volume, 10-bar relative volume, and RS% versus SPY on one row
+- **Price alerts** — place an alert at any price from the alert bar; lines appear on both charts and fade once hit (checked against daily bars for now; designed to plug into a live IBKR feed later). Alerts persist in `output/alerts.json`.
 - Synchronized crosshair and a measurement tool across both charts
 - Metadata bar: price, sector, RS ranks, breakout status, nearest support/resistance
 - Earnings date lookup and macro-calendar warnings (events within 7 days, red alert under 3)
@@ -120,6 +127,13 @@ The GUI shows, for each ticker in the latest scan:
 
 5. **Check the banners** before shortlisting: an earnings date or macro event (CPI, FOMC) inside 3 days shows a red warning — binary-event risk you probably don't want to hold through.
 
+To generate only setups where the market bias, relative strength/weakness,
+trend, timing, and reward/risk gates align:
+
+```bash
+python run_daily_rs.py --decision actionable
+```
+
 ## Reading the output CSV
 
 Each row is one ticker. The headline column is **`combined_rank`** (0–1 percentile; 0.99 means top 1% of the filtered universe). Other notable columns:
@@ -130,6 +144,7 @@ Each row is one ticker. The headline column is **`combined_rank`** (0–1 percen
 - `broke_horizontal_long/short`, `broke_trendline_long/short`, `broke_sma200_long/short` — today's breakout flags
 - `nearest_support` / `nearest_resistance` and their distances in ATR multiples
 - `sma200_cross_up_age` — days since price reclaimed the SMA200
+- `trade_action`, `setup_score`, `decision_reasons`, `stop_reference`, `reward_risk` — market-first long/short decision context
 
 ## Project layout
 
@@ -176,6 +191,7 @@ The suite covers indicators, filters, signals, ranking, and config on synthetic 
 Filters, indicators, and signals all follow small abstract base classes, so adding one is ~50 lines. The `workflows/` docs walk through it:
 
 - [`workflows/daily_rs_scan.md`](workflows/daily_rs_scan.md) — full pipeline reference, edge cases, CSV interpretation
+- [`workflows/trading_system.md`](workflows/trading_system.md) — the market-first long/short decision rules
 - [`workflows/add_new_signal.md`](workflows/add_new_signal.md) — how to add a scoring signal and wire it into ranking
 - [`workflows/add_new_filter.md`](workflows/add_new_filter.md) — hygiene vs directional filters, and where each belongs
 
